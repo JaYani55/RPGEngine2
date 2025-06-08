@@ -1,6 +1,11 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from enum import Enum, auto
 import json # Required for type hinting if not already present
 from data_manager import load_all_abilities_from_categorized_json # New import
+
+if TYPE_CHECKING:
+    from engine import GameEngine, Entity # Forward declaration for type hinting
 
 class TargetType(Enum):
     SELF = "SELF"
@@ -30,6 +35,96 @@ class Ability:
         self.target_type = target_type
         self.description = description
         self.effect_radius = effect_radius
+
+    def execute(self, actor: Entity, target_pos: tuple[int, int], engine: GameEngine) -> tuple[bool, str]:
+        """
+        Executes the ability.
+        This base method handles simple damage and movement.
+        More complex abilities might need to be overridden this or be handled by subclasses.
+        """
+        # --- Movement ---
+        if self.id_name == "move":
+            path = engine.find_path(actor.x, actor.y, target_pos[0], target_pos[1])
+            if not path or len(path) <= 1:
+                return False, f"{actor.name} cannot find a path to ({target_pos[0]},{target_pos[1]})."
+            
+            ap_cost_for_move = len(path) - 1
+            if actor.current_ap < ap_cost_for_move:
+                return False, f"Not enough AP for {actor.name} to move. Needs {ap_cost_for_move}, has {actor.current_ap}."
+            if ap_cost_for_move > self.range: # Check against ability's max range for a single move action
+                 return False, f"{actor.name} cannot move that far ({ap_cost_for_move} steps) with {self.name} (Max: {self.range} steps)."
+
+            # Check if the destination is blocked by another entity (unless it's the actor itself, which shouldn't happen here)
+            blocking_entity = engine.get_blocking_entity_at(target_pos[0], target_pos[1], exclude_entity=actor)
+            if blocking_entity:
+                return False, f"Cannot move to ({target_pos[0]},{target_pos[1]}), tile is occupied by {blocking_entity.name}."
+
+            actor.x, actor.y = target_pos[0], target_pos[1]
+            actor.current_ap -= ap_cost_for_move # Deduct AP for movement
+            return True, f"{actor.name} moves to ({target_pos[0]},{target_pos[1]}) using {ap_cost_for_move} AP. AP left: {actor.current_ap}."
+
+        # --- Damage Application (for non-move abilities) ---
+        message_parts = []
+        targets_hit = []
+
+        if self.effect_radius == 0: # Single target
+            target_entity = engine.get_blocking_entity_at(target_pos[0], target_pos[1])
+            if target_entity:
+                targets_hit.append(target_entity)
+            elif self.target_type not in [TargetType.TILE, TargetType.SELF]: # If targeting entity but none found
+                return False, f"No target entity at ({target_pos[0]},{target_pos[1]}) for {self.name}."
+        else: # AoE
+            for entity_in_list in engine.entities:
+                if not entity_in_list.is_dead:
+                    # Manhattan distance for AoE
+                    dist = abs(entity_in_list.x - target_pos[0]) + abs(entity_in_list.y - target_pos[1]) 
+                    if dist <= self.effect_radius:
+                        targets_hit.append(entity_in_list)
+            if not targets_hit and self.target_type not in [TargetType.TILE, TargetType.SELF]:
+                 return False, f"No targets in AoE of {self.name} at ({target_pos[0]},{target_pos[1]})."
+
+        if not targets_hit and self.target_type not in [TargetType.TILE, TargetType.SELF]:
+            # If it's an attack ability that requires a target entity but none were hit
+             return False, f"{self.name} did not hit any valid targets."
+
+        if self.damage_amount > 0:
+            if not targets_hit and self.target_type not in [TargetType.TILE, TargetType.SELF]:
+                 return False, f"{self.name} missed or no target found."
+
+            for target_entity in targets_hit:
+                # Check faction for ENEMY/ALLY targeting
+                if self.target_type == TargetType.ENEMY and target_entity.faction == actor.faction:
+                    message_parts.append(f"{target_entity.name} is friendly, not targeted by {self.name}.")
+                    continue 
+                if self.target_type == TargetType.ALLY and target_entity.faction != actor.faction:
+                    message_parts.append(f"{target_entity.name} is not friendly, not targeted by {self.name}.")
+                    continue
+                
+                actual_damage = max(0, self.damage_amount - target_entity.defense)
+                damage_message = target_entity.take_damage(actual_damage)
+                message_parts.append(f"{actor.name} uses {self.name} on {target_entity.name}. {damage_message}")
+                if target_entity.is_dead:
+                    engine.add_log_message(f"{target_entity.name} was defeated by {actor.name}.")
+        elif self.target_type == TargetType.TILE:
+            message_parts.append(f"{actor.name} uses {self.name} on tile ({target_pos[0]},{target_pos[1]}).")
+        elif self.target_type == TargetType.SELF:
+             message_parts.append(f"{actor.name} uses {self.name} on self.")
+        else: # No damage, but ability might have other effects
+            message_parts.append(f"{actor.name} uses {self.name}.")
+            if not targets_hit and self.target_type not in [TargetType.TILE, TargetType.SELF]:
+                 message_parts.append("No targets affected.")
+
+        if not message_parts:
+            # This case implies an ability that isn't move, isn't damage, and isn't TILE/SELF, and hit no one.
+            # Or a damage ability that hit no one and wasn't TILE/SELF.
+            # It might be valid if an ability is purely cosmetic or has other side effects not yet coded.
+            # For now, consider it a non-action if nothing descriptive happened.
+            if self.damage_amount > 0 or self.target_type not in [TargetType.TILE, TargetType.SELF]:
+                 return False, f"{self.name} had no discernible effect or missed all targets."
+            else: # E.g. a self-buff with no immediate message, or a tile effect with no message
+                 message_parts.append(f"{self.name} was used.") # Generic success message
+            
+        return True, " ".join(message_parts)
 
     def __str__(self):
         return f"{self.name} (ID: {self.id_name}, AP: {self.ap_cost}, Range: {self.range}, Dmg: {self.damage_amount})"

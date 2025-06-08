@@ -2,16 +2,13 @@
 from utils import manhattan_distance 
 from config import MAX_CLIMB_HEIGHT_DIFFERENCE as MAX_CLIMB_HEIGHT_DIFF
 from config import MAX_MAP_HEIGHT_LEVEL as MAX_MAP_HEIGHT
-from data_manager import load_entity_data, list_available_ability_ids # Changed from list_available_entities
-from abilities import get_ability, Ability, TargetType # Added Ability, TargetType
-import collections # Add this import
-
-# --- Constants ---
-# MAX_CLIMB_HEIGHT_DIFF = 1 # Defined in config now
-# MAX_MAP_HEIGHT = 5        # Defined in config now
+from data_manager import load_entity_data, list_available_ability_ids
+from abilities import get_ability, Ability, TargetType
+from ai import Behavior, create_behavior  # Import AI behavior system
+import collections
 
 class GameMap:
-    def __init__(self, tiles, heightmap): # Ensure this is before GameEngine or any class that uses it
+    def __init__(self, tiles, heightmap):
         self.tiles = tiles
         self.width = len(tiles[0]) if tiles and len(tiles) > 0 else 0
         self.height = len(tiles) if tiles else 0
@@ -25,17 +22,15 @@ class GameMap:
 
     def get_tile_char(self, x, y):
         """Get the character of the tile at (x,y)."""
-        if self.is_valid(x,y):
+        if self.is_valid(x, y):
             return self.tiles[y][x]
-        return None # Or raise an error
+        return None
 
     def is_walkable(self, x, y):
         """Check if a tile is walkable (within bounds and not a blocking tile type)."""
         if not self.is_valid(x, y):
             return False
-        # Consider tile type for walkability
         tile_char = self.tiles[y][x]
-        # Example: '#' is a wall, not walkable. Add other non-walkable chars as needed.
         return tile_char in self.walkable_chars
 
     def get_height(self, x, y):
@@ -45,8 +40,11 @@ class GameMap:
             return self.heightmap[y][x]
         return 0 # Default height if out of bounds or no heightmap data
 
+
 class Entity:
-    def __init__(self, id, name, x, y, char, color, hp, ap, defense, abilities_ids=None, faction="neutral", sight_radius=5, max_hp=None): # Added max_hp
+    def __init__(self, id, name, x, y, char, color, hp, ap, defense, 
+                 abilities_ids=None, faction="neutral", sight_radius=5, 
+                 max_hp=None, behavior: Behavior | None = None):
         self.id = id
         self.name = name
         self.x = x
@@ -54,16 +52,17 @@ class Entity:
         self.char = char
         self.color = color
         self.hp = hp
-        self.max_hp = max_hp if max_hp is not None else hp # Use provided max_hp or default to hp
-        self.ap = ap # This will be max_ap
-        self.current_ap = ap # This will be used for turn-based AP consumption
+        self.max_hp = max_hp if max_hp is not None else hp
+        self.ap = ap # max_ap
+        self.current_ap = ap # current AP for turn-based consumption
         self.defense = defense
         self.abilities_ids = abilities_ids if abilities_ids is not None else []
-        self.abilities: list[Ability] = [] # This will be populated by resolve_abilities
+        self.abilities: list[Ability] = []
         self.faction = faction
         self.sight_radius = sight_radius
         self.is_dead = False
         self.status_effects = []
+        self.behavior = behavior  # AI behavior strategy
 
     def get_ability_by_id_name(self, ability_id_name: str) -> Ability | None:
         for ability in self.abilities:
@@ -71,36 +70,24 @@ class Entity:
                 return ability
         return None
 
-    # Renamed get_ability_by_name to get_ability_by_id_name for clarity
-    # def get_ability_by_name(self, ability_name: str) -> Ability | None:
-    #     for ability in self.abilities:
-    #         if ability.name == ability_name: # Old check by display name
-    #             return ability
-    #     return None
-
     def move(self, dx, dy, game_map):
         new_x, new_y = self.x + dx, self.y + dy
 
         if not game_map.is_walkable(new_x, new_y):
-            # print(f"{self.name} cannot move to blocked tile ({new_x},{new_y})")
             return False
 
         current_height = game_map.get_height(self.x, self.y)
         target_height = game_map.get_height(new_x, new_y)
 
         if target_height > MAX_MAP_HEIGHT:
-            # print(f"{self.name} cannot move to tile above max height ({new_x},{new_y})")
             return False
 
         height_diff = target_height - current_height
         if height_diff > MAX_CLIMB_HEIGHT_DIFF:
-            # print(f"{self.name} cannot climb from {current_height} to {target_height} at ({new_x},{new_y})")
             return False
-        # Can move down any height difference
 
         self.x = new_x
         self.y = new_y
-        # print(f"{self.name} moved to ({self.x},{self.y}) height {target_height}")
         return True
 
     def take_damage(self, amount):
@@ -108,8 +95,8 @@ class Entity:
         if self.hp <= 0:
             self.hp = 0
             self.is_dead = True
-            self.char = '%' # Or some other death indicator
-            self.color = (128, 128, 128) # Grey out
+            self.char = '%'
+            self.color = (128, 128, 128)
             return f"{self.name} dies."
         return f"{self.name} takes {amount} damage."
 
@@ -120,31 +107,32 @@ class Entity:
         return f"{self.name} heals for {amount} HP."
 
     def restore_ap(self, amount):
-        self.current_ap = min(self.ap, self.current_ap + amount) # Ensure not to exceed max AP
+        self.current_ap = min(self.ap, self.current_ap + amount)
 
 
 class GameEngine:
+    # Class constants
+    MAX_LOG_MESSAGES = 20
+    
     def __init__(self, game_map: GameMap):        
         self.game_map = game_map
         self.entities: list[Entity] = []
         self.player: Entity | None = None
         self.current_turn_index = 0
         self.turn_order: list[Entity] = []
-        self.game_state = "loading"  # "loading", "player_turn", "npc_turn", "game_over_player_win", "game_over_player_lose"
-        self.game_log: list[dict] = [] # Stores messages like {\'message\': "text", \'turn\': 0}
-        self.current_game_turn = 0 # To track game turns for logging or events
-        self.MAX_LOG_MESSAGES = 20 # Define MAX_LOG_MESSAGES
+        self.game_state = "loading"
+        self.game_log: list[dict] = []
+        self.current_game_turn = 0
 
     def add_log_message(self, message: str):
-        if len(self.game_log) >= self.MAX_LOG_MESSAGES: # Use >= to correctly cap
-            self.game_log.pop(0) # Remove the oldest message
+        if len(self.game_log) >= self.MAX_LOG_MESSAGES:
+            self.game_log.pop(0)
         self.game_log.append({'message': message, 'turn': self.current_game_turn})
         print(f"ENGINE_LOG (Turn {self.current_game_turn}): {message}")
-        
 
     def _start_entity_turn(self, entity: Entity):
         """Resets AP for the entity whose turn is starting and sets game state."""
-        entity.current_ap = entity.ap # Reset current_ap to max_ap (which is stored in entity.ap)
+        entity.current_ap = entity.ap
         self.add_log_message(f"{entity.name}'s turn begins (AP: {entity.current_ap}).")
         if entity == self.player:
             self.game_state = "player_turn"
@@ -154,7 +142,6 @@ class GameEngine:
     def initialize_entities_from_map_data(self, entities_data: list[dict]):
         self.entities.clear()
         for map_entity_data in entities_data:
-            # Map entity data only contains position and basic info
             entity_id = map_entity_data.get("id")
             if not entity_id:
                 print(f"Warning: Entity data missing 'id', skipping: {map_entity_data.get('name', 'Unknown')}")
@@ -168,24 +155,27 @@ class GameEngine:
                 continue
 
             # Merge map position data with entity definition data
-            # Map data takes precedence for position
             merged_data = entity_definition.copy()
             merged_data.update({
                 "x": map_entity_data.get("x", 0),
                 "y": map_entity_data.get("y", 0),
-                "is_player_start": map_entity_data.get("is_player_start", False) # Preserve player flag from map
+                "is_player_start": map_entity_data.get("is_player_start", False)
             })
 
             # Resolve abilities from IDs
             resolved_abilities = []
-            ability_ids = merged_data.get("abilities", []) # Default to empty list
-            if ability_ids: # Check if None or empty
+            ability_ids = merged_data.get("abilities", [])
+            if ability_ids:
                 for ab_id in ability_ids:
                     ability = get_ability(ab_id)
                     if ability:
                         resolved_abilities.append(ability)
                     else:
                         self.add_log_message(f"Warning: Ability ID '{ab_id}' not found for entity '{entity_id}'.")
+            
+            # Create behavior from behavior name
+            behavior_name = merged_data.get("behavior", "aggressive_melee")
+            entity_behavior = create_behavior(behavior_name)
             
             try:
                 entity = Entity(
@@ -196,52 +186,38 @@ class GameEngine:
                     char=merged_data.get("char", "?"),
                     color=merged_data.get("color", (200, 200, 200)),
                     hp=merged_data.get("hp", 10),
-                    max_hp=merged_data.get("max_hp"), # Pass max_hp, Entity constructor handles if None
+                    max_hp=merged_data.get("max_hp"),
                     ap=merged_data.get("ap", 3),
                     defense=merged_data.get("defense", 0),
-                    abilities_ids=ability_ids, # Store original IDs for reference if needed
+                    abilities_ids=ability_ids,
                     faction=merged_data.get("faction", "neutral"),
-                    sight_radius=merged_data.get("sight_radius", 5)
-                    # Removed behavior as it's not a direct Entity param
+                    sight_radius=merged_data.get("sight_radius", 5),
+                    behavior=entity_behavior
                 )
-                entity.abilities = resolved_abilities # Assign resolved ability objects                
-                # Store behavior separately if needed by GameEngine or specific entity types later
-                entity.behavior_name = merged_data.get("behavior") 
+                entity.abilities = resolved_abilities
 
                 self.entities.append(entity)
-                if merged_data.get("is_player_start", False): # Check for a player flag (changed from "is_player")
+                if merged_data.get("is_player_start", False):
                     self.player = entity
-                    # Set the player's faction to "player" for rendering purposes
                     entity.faction = "player"
+                    entity.behavior = None  # Player doesn't need AI behavior
                     self.add_log_message(f"Player entity '{entity.name}' initialized.")
-            except TypeError as e:
-                self.add_log_message(f"Error creating entity '{entity_id}': {e}. Data: {merged_data}")
-                print(f"Error creating entity '{entity_id}': {e}. Data: {merged_data}")
-            except Exception as e: # Catch any other unexpected error during entity creation
-                self.add_log_message(f"Unexpected error creating entity '{entity_id}': {e}. Data: {merged_data}")
-                print(f"Unexpected error creating entity '{entity_id}': {e}. Data: {merged_data}")
+            except (TypeError, Exception) as e:
+                self.add_log_message(f"Error creating entity '{entity_id}': {e}")
+                print(f"Error creating entity '{entity_id}': {e}")
 
-
-        if not self.player and self.entities: # Fallback if no player explicitly marked but entities exist
-            # This is a simple fallback, might need more robust player identification
-            # For now, let\'s assume the first entity could be the player if no "is_player" flag is found.
-            # Or, better, require "is_player" for clarity.
-            # self.player = self.entities[0] 
-            # self.add_log_message(f"Warning: No entity marked as player. Defaulting to first entity: {self.player.name}")
-            self.add_log_message("Warning: No entity explicitly marked as \'is_player_start\' in map data.") # Changed message
+        if not self.player and self.entities:
+            self.add_log_message("Warning: No entity explicitly marked as 'is_player_start' in map data.")
         
         self._setup_turn_order()
         self.add_log_message(f"Entities initialized. Count: {len(self.entities)}. Player: {self.player.name if self.player else 'None'}")
-
 
     def get_player(self) -> Entity | None:
         """Returns the player entity."""
         return self.player
 
     def find_player_index(self) -> int:
-        """Finds the index of the player in the current turn order.
-        Returns -1 if player is not found or no player exists.
-        """
+        """Finds the index of the player in the current turn order."""
         if not self.player or not self.turn_order:
             return -1
         try:
@@ -250,8 +226,7 @@ class GameEngine:
             return -1
 
     def _setup_turn_order(self):
-        # Simple turn order for now, can be expanded (e.g., by initiative)
-        self.turn_order = [e for e in self.entities if not e.is_dead] # Only living entities
+        self.turn_order = [e for e in self.entities if not e.is_dead]
         # Ensure player is first if present
         if self.player and self.player in self.turn_order:
             self.turn_order.remove(self.player)
@@ -259,15 +234,14 @@ class GameEngine:
         self.current_turn_index = 0
         if not self.turn_order:
             self.add_log_message("Warning: Turn order is empty after setup.")
-            self.game_state = "game_over_player_lose" # Or some other appropriate state
+            self.game_state = "game_over_player_lose"
         else:
             self.add_log_message(f"Turn order set: {[e.name for e in self.turn_order]}")
-
 
     def start_game(self):
         if not self.turn_order:
             self.add_log_message("Cannot start game: No entities in turn order.")
-            self.game_state = "no_entities" # Or some other appropriate error state
+            self.game_state = "no_entities"
             return
 
         player_idx = self.find_player_index()
@@ -275,11 +249,10 @@ class GameEngine:
         if player_idx != -1:
             self.current_turn_index = player_idx
             self._start_entity_turn(self.turn_order[self.current_turn_index])
-        elif self.turn_order: # No player, but other entities exist
-            self.current_turn_index = 0 # Start with the first entity in the order
+        elif self.turn_order:
+            self.current_turn_index = 0
             self._start_entity_turn(self.turn_order[self.current_turn_index])
-            # game_state is set by _start_entity_turn (will be npc_turn)
-        else: # Should be caught by the initial check, but as a safeguard
+        else:
             self.add_log_message("Cannot start game: Turn order became empty unexpectedly.")
             self.game_state = "no_entities"
             return
@@ -294,13 +267,11 @@ class GameEngine:
 
     def check_game_over_conditions(self):
         """Check if the game should end and set the appropriate game state."""
-        # Check if player is dead
         if self.player and self.player.is_dead:
             self.game_state = "game_over_player_lose"
             self.add_log_message(f"Game Over: {self.player.name} has been defeated.")
             return
         
-        # Check if all non-player entities are dead (victory condition)
         if self.player and not self.player.is_dead:
             non_player_entities_alive = any(e for e in self.entities if not e.is_dead and e != self.player and e.faction != "player")
             if not non_player_entities_alive:
@@ -311,178 +282,158 @@ class GameEngine:
     def next_turn(self):
         if not self.turn_order:
             self.add_log_message("Attempted next_turn with empty turn order.")
-            # Decide game over state based on player status
             if self.player and self.player.is_dead:
                 self.game_state = "game_over_player_lose"
-            else: # No entities left, or player won somehow before this
-                self.game_state = "game_over_player_win" # Or a draw/stalemate state
+            else:
+                self.game_state = "game_over_player_win"
             return
 
-        # End current entity's turn (apply effects, etc. - future)
         current_entity = self.get_current_turn_entity()
         if current_entity:
             self.add_log_message(f"Ending turn for {current_entity.name}.")
-            # Restore some AP at end of turn or start of next? For now, handled at start.
 
         self.current_turn_index = (self.current_turn_index + 1) % len(self.turn_order)
         next_entity = self.turn_order[self.current_turn_index]
 
         # Skip dead entities
-        while next_entity.is_dead:
+        attempts = 0
+        while next_entity.is_dead and attempts < len(self.turn_order):
             self.add_log_message(f"Skipping dead entity {next_entity.name} in turn order.")
             self.current_turn_index = (self.current_turn_index + 1) % len(self.turn_order)
             next_entity = self.turn_order[self.current_turn_index]
-            if all(e.is_dead for e in self.turn_order):
-                self.add_log_message("All entities in turn order are dead.")
-                # This should ideally be caught by win/loss conditions earlier
-                self.game_state = "game_over_player_lose" # Or win if player is the only one not dead (but how?)
-                return
+            attempts += 1
 
-
-        self._start_entity_turn(next_entity) # This sets current_ap and game_state
-
-        # Check for game over conditions after turn change
-        if self.player and self.player.is_dead:
+        if attempts >= len(self.turn_order):
+            self.add_log_message("All entities in turn order are dead.")
             self.game_state = "game_over_player_lose"
-            self.add_log_message(f"Game Over: {self.player.name} has been defeated.")
             return
-        
-        # Check if only player (or player's faction) remains
-        non_player_faction_alive = any(e for e in self.entities if not e.is_dead and e.faction != self.player.faction) if self.player else False
-        if self.player and not self.player.is_dead and not non_player_faction_alive :
-            self.game_state = "game_over_player_win"
-            self.add_log_message(f"Game Over: {self.player.name} is victorious!")
-            return
-            
-        self.current_game_turn +=1 # Increment game turn counter only when a full cycle might have passed or significant event.
-                                   # Or, more accurately, after all entities have had a turn.
-                                   # For now, let's increment it when the turn passes back to the first entity in order.
-        if self.current_turn_index == 0 : # A full round has passed
-             self.add_log_message(f"--- New Round: {self.current_game_turn} ---")
 
+        self._start_entity_turn(next_entity)
+        self.check_game_over_conditions()
 
     def get_valid_moves(self, entity: Entity, ability: Ability | None = None) -> list[tuple[int, int]]:
-        """
-        Calculates valid move tiles for an entity.
-        If 'move' ability is provided, it uses AP-based calculation.
-        Otherwise, it might be for other abilities that define a range.
-        """
-        if ability and ability.id_name == "move":
-            # For the "move" ability, AP is the primary constraint.
-            # The returned list here is just for highlighting, actual cost is handled elsewhere.
-            reachable_data = self.get_reachable_tiles_with_ap_cost(entity, ability)
-            return list(reachable_data.keys())
-
-        # Fallback or for other types of abilities that might use 'range' for movement-like effects
-        # This part might need review depending on how other abilities are designed.
-        # For now, assume non-"move" abilities use their defined range directly if they are for targeting.
-        return self.get_ability_range_tiles(entity, ability) # Standard range calculation
-
-    def get_reachable_tiles_with_ap_cost(self, start_entity: Entity, max_ap_cost: int | None = None) -> dict[tuple[int, int], int]:
-        """
-        Calculates reachable tiles for an entity within a given AP cost.
-        Uses Dijkstra's or a similar algorithm.
-        Returns a dictionary of {(x, y): ap_cost}.
-        """
-        if not start_entity:
-            return {}
-
-        if max_ap_cost is None:
-            max_ap_cost = start_entity.current_ap
-
-        # Cost to move to an adjacent tile (can be customized per tile type later)
-        move_cost_per_tile = 1 # Assuming 1 AP per tile for now
-
-        # {(x,y): ap_cost}
-        reachable_tiles: dict[tuple[int, int], int] = {}
-        # queue stores (ap_spent, x, y)
-        queue = collections.deque([(0, start_entity.x, start_entity.y)])
-        # visited stores {(x,y): min_ap_to_reach}
-        visited: dict[tuple[int, int], int] = {(start_entity.x, start_entity.y): 0}
-
-        while queue:
-            ap_spent, cx, cy = queue.popleft()
-
-            if ap_spent > max_ap_cost:
-                continue
-
-            # Add current tile to reachable if not already there or found a cheaper path
-            # (though with uniform cost, first visit is always cheapest)
-            if (cx, cy) not in reachable_tiles or ap_spent < reachable_tiles[(cx, cy)]:
-                 if (cx, cy) != (start_entity.x, start_entity.y): # Don't include the start tile itself as a "move"
-                    reachable_tiles[(cx, cy)] = ap_spent
-            
-            # Explore neighbors
-            for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]: # Cardinal directions
-                nx, ny = cx + dx, cy + dy
-                
-                new_ap_cost = ap_spent + move_cost_per_tile
-
-                if new_ap_cost > max_ap_cost: # Cannot afford to move to this neighbor
-                    continue
-
-                if self.game_map.is_walkable(nx, ny) and not self.get_blocking_entity_at(nx, ny):
-                    if (nx, ny) not in visited or new_ap_cost < visited[(nx, ny)]:
-                        visited[(nx, ny)] = new_ap_cost
-                        queue.append((new_ap_cost, nx, ny))
-        
-        return reachable_tiles
-
-    def get_ability_range_tiles(self, entity: Entity, ability: Ability) -> list[tuple[int, int]]:
-        """Gets all tiles within an ability's range for a given entity."""
-        if not entity or not ability or entity.ap < ability.ap_cost:
+        """Get all valid move positions for an entity within their AP range."""
+        if not ability or ability.id_name != "move":
             return []
 
-        range_val = ability.range
-        in_range_tiles = []
+        valid_moves = []
+        max_range = min(entity.current_ap, ability.range)
 
-        # If target type is SELF, range is usually 0 or 1 (affecting only self tile)
+        for dx in range(-max_range, max_range + 1):
+            for dy in range(-max_range, max_range + 1):
+                manhattan_dist = abs(dx) + abs(dy)
+                if manhattan_dist == 0 or manhattan_dist > max_range:
+                    continue
+
+                new_x, new_y = entity.x + dx, entity.y + dy
+                if (self.game_map.is_walkable(new_x, new_y) and 
+                    not self.get_blocking_entity_at(new_x, new_y, exclude_entity=entity)):
+                    
+                    # Check if path exists and is within AP cost
+                    path = self.find_path(entity.x, entity.y, new_x, new_y)
+                    if path and len(path) - 1 <= entity.current_ap:
+                        valid_moves.append((new_x, new_y))
+
+        return valid_moves
+
+    def get_reachable_tiles_with_ap_cost(self, entity: Entity) -> list[tuple[tuple[int, int], int]]:
+        """Get all reachable tiles with their AP costs for an entity."""
+        reachable = []
+        max_ap = entity.current_ap
+
+        for dx in range(-max_ap, max_ap + 1):
+            for dy in range(-max_ap, max_ap + 1):
+                manhattan_dist = abs(dx) + abs(dy)
+                if manhattan_dist == 0 or manhattan_dist > max_ap:
+                    continue
+
+                new_x, new_y = entity.x + dx, entity.y + dy
+                if (self.game_map.is_walkable(new_x, new_y) and 
+                    not self.get_blocking_entity_at(new_x, new_y, exclude_entity=entity)):
+                    
+                    path = self.find_path(entity.x, entity.y, new_x, new_y)
+                    if path:
+                        ap_cost = len(path) - 1
+                        if ap_cost <= max_ap:
+                            reachable.append(((new_x, new_y), ap_cost))
+
+        return reachable
+
+    def get_valid_targets_for_ability(self, entity: Entity, ability: Ability | None = None) -> list[tuple[int, int]]:
+        """Get all valid target tiles for an ability."""
+        if not ability:
+            return []
+
+        in_range_tiles = []
+        range_val = ability.range
+
+        if ability.id_name == "move":
+            return self.get_valid_moves(entity, ability)
+
         if ability.target_type == TargetType.SELF:
-            # For self-target, often the "range" means it just applies to the entity's current tile.
-            # If it has an effect_radius > 0, it might emanate from self.
-            # For simplicity, if range is 0 or 1 for SELF, it's just the entity's tile.
-            # If actual range highlighting is needed for self-centered AoE, this needs adjustment.
-            if ability.effect_radius == 0: # Single target self
-                 return [(entity.x, entity.y)] # Or empty if it doesn't highlight
-            else: # Self-centered AoE
-                # Calculate AoE tiles around entity based on effect_radius
-                for r_x in range(-ability.effect_radius, ability.effect_radius + 1):
-                    for r_y in range(-ability.effect_radius, ability.effect_radius + 1):
-                        # Optional: use effect_radius as Manhattan or Chebyshev distance for shape
-                        # if abs(r_x) + abs(r_y) > ability.effect_radius: continue # Manhattan shape
+            return [(entity.x, entity.y)]
+
+        if ability.effect_radius > 0:
+            # For AoE abilities, return tiles where the effect can be centered
+            for r_x in range(-ability.effect_radius, ability.effect_radius + 1):
+                for r_y in range(-ability.effect_radius, ability.effect_radius + 1):
+                    if abs(r_x) + abs(r_y) <= range_val:
                         tile_x, tile_y = entity.x + r_x, entity.y + r_y
                         if self.game_map.is_valid(tile_x, tile_y):
                             in_range_tiles.append((tile_x, tile_y))
-                return list(set(in_range_tiles)) # Remove duplicates
+            return list(set(in_range_tiles))
 
         # For other target types, calculate based on ability.range
         for y_coord in range(self.game_map.height):
             for x_coord in range(self.game_map.width):
-                # Do not include the entity's own tile for most targeted abilities unless explicitly allowed
-                # (e.g. an AoE centered on self but can hit others, or a point-blank AoE)
-                # Current Pistol Shot example should not target self tile.
                 if ability.target_type != TargetType.TILE and (x_coord, y_coord) == (entity.x, entity.y) and ability.effect_radius == 0:
                     continue
                 
                 dist = manhattan_distance((entity.x, entity.y), (x_coord, y_coord))
                 if dist <= range_val:
-                    # TODO: Add Line of Sight check here if necessary for the ability
-                    # For now, all tiles in range are considered valid targets.
                     in_range_tiles.append((x_coord, y_coord))
         
-        # If the ability has an Area of Effect (AoE) centered on the target tile:
-        # The `in_range_tiles` currently are potential *centers* of an AoE.
-        # The actual highlighted area would be these tiles + their AoE if effect_radius > 0.
-        # This function is for "where can I click to START the ability".
-        # The renderer will need to know the effect_radius if it's to draw the AoE preview.
-        return list(set(in_range_tiles)) # Remove duplicates
+        return list(set(in_range_tiles))
 
     def get_blocking_entity_at(self, x: int, y: int, exclude_entity: Entity | None = None) -> Entity | None:
         """Returns the entity at the given coordinates if it blocks movement, otherwise None."""
         for entity in self.entities:
-            if entity.x == x and entity.y == y and not entity.is_dead and entity != exclude_entity: # Consider dead entities as non-blocking and exclude specific entity
+            if entity.x == x and entity.y == y and not entity.is_dead and entity != exclude_entity:
                 return entity
         return None
+
+    def _execute_action(self, actor: Entity, ability: Ability, target_pos: tuple[int, int]) -> tuple[bool, str]:
+        """
+        A generic method to execute an action for any entity.
+        
+        Args:
+            actor: The entity performing the action
+            ability: The ability being used
+            target_pos: Target position (x, y)
+            
+        Returns:
+            tuple[bool, str]: (success, message)
+        """
+        # 1. Check AP cost (for non-move abilities, move AP is checked in Ability.execute)
+        if ability.id_name != "move" and actor.current_ap < ability.ap_cost:
+            return False, f"Not enough AP for {ability.name}."
+
+        # 2. Check Range
+        if not self.is_target_in_ability_range(actor, ability, target_pos):
+            return False, f"Target is out of range for {ability.name}."
+        
+        # 3. Execute the ability's own logic
+        success, message = ability.execute(actor, target_pos, self)
+
+        # 4. Deduct AP for non-move abilities if successful
+        #    AP for "move" is now handled within Ability.execute itself.
+        if success and ability.id_name != "move":
+            actor.current_ap -= ability.ap_cost
+            # Append AP cost to message only if not already handled by ability.execute (e.g. for moves)
+            if "AP left" not in message: 
+                message += f" AP left: {actor.current_ap}."
+        
+        return success, message
 
     def handle_player_action(self, action_type: str, target_pos: tuple[int, int] | None = None, ability_to_use: Ability | None = None) -> tuple[bool, str]:
         if not self.player or self.player.is_dead:
@@ -494,173 +445,73 @@ class GameEngine:
         message = ""
 
         if action_type == "ability" and ability_to_use and target_pos:
-            if self.player.current_ap >= ability_to_use.ap_cost:
-                # For "move" ability, the target_pos is the destination.
-                # The AP cost is determined by the path length.
-                if ability_to_use.id_name == "move":
-                    # We need to calculate the actual AP cost for the move.
-                    # The get_reachable_tiles_with_ap_cost gives us this.
-                    
-                    path = self.find_path(self.player.x, self.player.y, target_pos[0], target_pos[1])
-                    if not path or len(path) <=1: # Path must exist and have more than just the start node
-                        return False, "Cannot find valid path to target or target is current location."
-
-                    actual_ap_cost = len(path) -1 # Cost is number of steps
-                    
-                    if self.player.current_ap >= actual_ap_cost:
-                        self.player.x, self.player.y = target_pos
-                        self.player.current_ap -= actual_ap_cost
-                        success = True
-                        message = f"{self.player.name} moved to ({target_pos[0]}, {target_pos[1]}) using {actual_ap_cost} AP. AP left: {self.player.current_ap}."
-                        self.log_message(message)
-                    else:
-                        return False, f"Not enough AP to move. Needs {actual_ap_cost}, has {self.player.current_ap}."
-
-                else: # Other abilities
-                    # Check range for non-move abilities
-                    if not self.is_target_in_ability_range(self.player, ability_to_use, target_pos):
-                        return False, f"Target out of range for {ability_to_use.name}."
-
-                    self.player.current_ap -= ability_to_use.ap_cost
-                    # Execute ability effect
-                    target_entity = self.get_blocking_entity_at(target_pos[0], target_pos[1])
-                    if target_entity:
-                        # Apply damage or effect based on ability damage
-                        if ability_to_use.damage_amount > 0:
-                            damage = ability_to_use.damage_amount
-                            target_entity.take_damage(damage)
-                            message = f"{self.player.name} used {ability_to_use.name} on {target_entity.name} for {damage} damage. AP left: {self.player.current_ap}."
-                            if target_entity.is_dead:
-                                message += f" {target_entity.name} has been defeated."
-                        else: # Other ability types (buff, debuff, etc.)
-                            message = f"{self.player.name} used {ability_to_use.name} on {target_entity.name}. AP left: {self.player.current_ap}."
-                    else: # Ability targeted an empty tile (e.g. AoE, summon)
-                        message = f"{self.player.name} used {ability_to_use.name} at ({target_pos[0]}, {target_pos[1]}). AP left: {self.player.current_ap}."
-                    
-                    success = True
-                    self.log_message(message)
-            else:
-                message = f"Not enough AP for {ability_to_use.name}. Needs {ability_to_use.ap_cost}, has {self.player.current_ap}."
-                success = False
-        
+            success, message = self._execute_action(self.player, ability_to_use, target_pos)
+            self.add_log_message(message)
         elif action_type == "end_turn":
             self.end_player_turn()
             success = True
             message = "Player ends turn."
-            # No AP cost for ending turn.
         else:
             message = "Invalid action."
             success = False
 
+        # Auto-end turn if AP reaches 0
         if success and self.player.current_ap <= 0 and self.game_state == "player_turn":
-            self.log_message(f"{self.player.name} has 0 AP. Ending turn automatically.")
+            self.add_log_message(f"{self.player.name} has 0 AP. Ending turn automatically.")
             self.end_player_turn()
-            # Message about auto turn end is already logged.        self.check_game_over_conditions()
+        
+        self.check_game_over_conditions()
         return success, message
 
-    def run_npc_behavior(self, npc: Entity):
-        if npc.is_dead or self.game_state != "npc_turn" or self.get_current_turn_entity() != npc:
-            return False, f"{npc.name} cannot act (dead or not their turn)."
+    def run_npc_turn(self, npc: Entity):
+        """
+        Execute an NPC's turn using their behavior strategy.
+        This replaces the old run_npc_behavior method.
+        """
+        print(f"ENGINE_DEBUG: run_npc_turn called for {npc.name}. Is dead: {npc.is_dead}. Current turn entity: {self.get_current_turn_entity().name if self.get_current_turn_entity() else 'None'}") # DEBUG
+        if npc.is_dead or self.get_current_turn_entity() != npc:
+            print(f"ENGINE_DEBUG: run_npc_turn returning early for {npc.name}. Condition: is_dead={npc.is_dead}, current_turn_entity_is_npc={self.get_current_turn_entity() == npc}") # DEBUG
+            return
 
-        self.log_message(f"--- {npc.name}'s turn (AP: {npc.current_ap}) ---")
-        actions_taken_this_turn = 0
-        max_actions_per_loop = 5 # Safety break for complex AI later
+        self.add_log_message(f"--- {npc.name}'s turn (AP: {npc.current_ap}) ---")
 
-        while npc.current_ap > 0 and actions_taken_this_turn < max_actions_per_loop:
-            action_performed_in_iteration = False
-            # Basic AI: If player is in sight, try to attack. If not, move towards player.
-            # More complex AI would involve evaluating abilities, positions, etc.
+        # Safety counter to prevent infinite loops
+        actions_taken = 0
+        max_actions = 10
 
-            if self.player and not self.player.is_dead:                # 1. Check if any attack ability can hit the player
-                can_attack_player = False
-                attack_ability_to_use: Ability | None = None
+        while npc.current_ap > 0 and actions_taken < max_actions:
+            if not npc.behavior:
+                self.add_log_message(f"{npc.name} has no behavior defined. Ending turn.")
+                print(f"ENGINE_DEBUG: {npc.name} has no behavior. Ending turn.") # DEBUG
+                break
+
+            # Ask the behavior strategy for an action
+            print(f"ENGINE_DEBUG: {npc.name} calling behavior.choose_action. Behavior type: {type(npc.behavior)}") # DEBUG
+            action = npc.behavior.choose_action(npc, self)
+            print(f"ENGINE_DEBUG: {npc.name} behavior.choose_action returned: {action}") # DEBUG
+            
+            if action:
+                ability, target_pos = action
+                success, message = self._execute_action(npc, ability, target_pos)
+                self.add_log_message(message)
                 
-                for ability in npc.abilities:
-                    # Consider an ability an attack if it deals damage and isn't a movement ability
-                    is_attack_ability = ability.damage_amount > 0 and ability.id_name != "move"
-                    if is_attack_ability and npc.current_ap >= ability.ap_cost:
-                        if self.is_target_in_ability_range(npc, ability, (self.player.x, self.player.y)):
-                            # Check for line of sight if ability requires it (not implemented yet)
-                            # For now, assume direct line of sight if in range.
-                            attack_ability_to_use = ability
-                            can_attack_player = True
-                            break
-                
-                if can_attack_player and attack_ability_to_use:
-                    damage = attack_ability_to_use.damage_amount
-                    self.player.hp -= damage  # Simple damage application
-                    if self.player.hp <= 0:
-                        self.player.is_dead = True
-                    npc.current_ap -= attack_ability_to_use.ap_cost
-                    log_msg = f"{npc.name} attacks {self.player.name} with {attack_ability_to_use.name} for {damage} damage. AP left: {npc.current_ap}."
-                    self.log_message(log_msg)
-                    action_performed_in_iteration = True
-                    actions_taken_this_turn +=1
-                    if self.player.is_dead:
-                        self.log_message(f"{self.player.name} has been defeated.")
-                        self.check_game_over_conditions()
-                        break # End NPC turn if player is dead
-                
-                # 2. If cannot attack, try to move closer to the player
-                elif npc.current_ap > 0: # Check AP again before moving
-                    move_ability = npc.get_ability_by_id_name("move")
-                    if move_ability and npc.current_ap > 0: # Check AP for any move, actual cost later
-                        path = self.find_path(npc.x, npc.y, self.player.x, self.player.y)
-                        if path and len(path) > 1: # Path exists and is not just the current spot
-                            max_steps_possible_with_ap = npc.current_ap # Assuming 1 AP per tile for move
-                            
-                            steps_to_take = 0
-                            for i in range(1, min(len(path), max_steps_possible_with_ap + 1)):
-                                next_x, next_y = path[i]
-                                if self.game_map.is_walkable(next_x, next_y) and not self.get_blocking_entity_at(next_x, next_y, exclude_entity=npc):
-                                    steps_to_take = i
-                                else:
-                                    break 
-                            
-                            if steps_to_take > 0:
-                                target_x, target_y = path[steps_to_take]
-                                actual_ap_cost = steps_to_take 
-                                
-                                if npc.current_ap >= actual_ap_cost:
-                                    npc.x, npc.y = target_x, target_y
-                                    npc.current_ap -= actual_ap_cost
-                                    log_msg = f"{npc.name} moves towards player to ({target_x}, {target_y}) using {actual_ap_cost} AP. AP left: {npc.current_ap}."
-                                    self.log_message(log_msg)
-                                    action_performed_in_iteration = True
-                                    actions_taken_this_turn +=1
-                                else:
-                                    # This case should ideally not be hit if max_steps_possible_with_ap is correct
-                                    self.log_message(f"{npc.name} calculated move but lacked AP. Needs {actual_ap_cost}, has {npc.current_ap}")
-                                    break
-                            else: # No valid steps to take along the path
-                                self.log_message(f"{npc.name} wants to move but path is blocked or too short.")
-                                break # Cannot move, break from action loop
-                        else: # No path to player
-                            self.log_message(f"{npc.name} cannot find a path to the player.")
-                            break # Cannot move, break from action loop
-                    else: # No move ability or not enough AP for a basic move
-                        self.log_message(f"{npc.name} cannot move (no move ability or not enough AP).")
-                        break # Cannot move, break from action loop
-                else: # Not enough AP for any further action
-                    break 
-            else: # No player or player is dead
-                self.log_message(f"{npc.name} has no target or player is defeated. Ending turn.")
-                break # End action loop
-
-            if not action_performed_in_iteration:
-                # If no action was performed (e.g. couldn't attack, couldn't move), end NPC's actions for this turn.
-                self.log_message(f"{npc.name} has no further actions or cannot act. AP: {npc.current_ap}")
+                if not success:
+                    # If action failed, stop trying
+                    break
+                    
+                actions_taken += 1
+            else:
+                # Behavior decided to do nothing
+                self.add_log_message(f"{npc.name} chooses to wait.")
                 break
             
-            if self.check_game_over_conditions(): # Check game over after each action
-                return # Game over, stop processing        # End of NPC's actions for this turn
-        self.log_message(f"--- {npc.name}'s turn ends ---")
-        
-        # Advance to the next turn now that this NPC has finished its actions
+            # Check for game over after each action
+            if self.player and self.player.is_dead:
+                self.check_game_over_conditions()
+                return
+
+        self.add_log_message(f"--- {npc.name}'s turn ends ---")
         self.next_turn()
-        
-        # Return whether any actions were taken and a summary message
-        return actions_taken_this_turn > 0, f"{npc.name} completed {actions_taken_this_turn} actions."
 
     def find_path(self, start_x: int, start_y: int, end_x: int, end_y: int) -> list[tuple[int, int]] | None:
         """
@@ -710,12 +561,10 @@ class GameEngine:
                 visited.add((nx, ny))
                 queue.append((nx, ny, new_path))
         
-        return None  # No path found
+        return None
 
     def is_target_in_ability_range(self, entity: Entity, ability: Ability, target_pos: tuple[int, int]) -> bool:
-        """
-        Check if a target position is within the range of an ability for the given entity.
-        """
+        """Check if a target position is within the range of an ability for the given entity."""
         if not ability:
             return False
         
@@ -725,15 +574,12 @@ class GameEngine:
 
     def log_message(self, message: str):
         """
-        Simple logging method that delegates to add_log_message.
-        This provides compatibility for code that calls log_message instead of add_log_message.
+        Compatibility method that delegates to add_log_message.
         """
         self.add_log_message(message)
 
     def end_player_turn(self):
-        """
-        End the player's turn and advance to the next entity.
-        """
+        """End the player's turn and advance to the next entity."""
         if self.player:
-            self.log_message(f"{self.player.name}'s turn ends. AP remaining: {self.player.current_ap}")
+            self.add_log_message(f"{self.player.name}'s turn ends. AP remaining: {self.player.current_ap}")
         self.next_turn()

@@ -8,5 +8,15 @@
     "target_type": "ENEMY",
     "description": "A standard ranged attack with a pistol. Deals 10 physical damage.",
     "effect_radius": 0
-  }
+  },
+    "Deathstare": {
+        "name": "Deathstare",
+        "ap_cost": 1,
+        "range": 5,
+        "damage_amount": 9999,
+        "damage_type": "physical",
+        "target_type": "ENEMY",
+        "description": "Stare down the enemy, killing them instantly.",
+        "effect_radius": 0
+    }
 }

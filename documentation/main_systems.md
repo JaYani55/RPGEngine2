@@ -21,24 +21,25 @@ This document outlines the core systems and architecture of the ASCII Tactical R
     *   [Turn Management](#turn-management)
     *   [NPC AI](#npc-ai)
     *   [Height System](#height-system)
-5.  [Renderer (`renderer.py`)](#renderer-rendererpy)
+5.  [AI System (`ai.py`)](#ai-system-ai.py)
+6.  [Renderer (`renderer.py`)](#renderer-rendererpy)
     *   [ASCII Rendering](#ascii-rendering)
     *   [Camera System](#camera-system)
-6.  [User Interface (`ui.py`)](#user-interface-uipy)
+7.  [User Interface (`ui.py`)](#user-interface-uipy)
     *   [Main Menu](#main-menu)
     *   [Map Selection](#map-selection)
     *   [Game UI](#game-ui)
     *   [Editor UI](#editor-ui)
-7.  [Game Logic (`game.py`)](#game-logic-gamepy)
+8.  [Game Logic (`game.py`)](#game-logic-gamepy)
     *   [Game States](#game-states)
     *   [Input Handling](#input-handling)
-8.  [Map Editor (`editor.py`)](#map-editor-editorpy)
+9.  [Map Editor (`editor.py`)](#map-editor-editorpy)
     *   [Tile Drawing](#tile-drawing)
     *   [Heightmap Editing](#heightmap-editing)
     *   [Entity Placement](#entity-placement)
     *   [Saving and Loading Maps](#saving-and-loading-maps)
-9.  [Interaction Flow](#interaction-flow)
-10. [Programmatic Deep Dives](#programmatic-deep-dives)
+10. [Interaction Flow](#interaction-flow)
+11. [Programmatic Deep Dives](#programmatic-deep-dives)
 
 ## 1. Project Overview
 
@@ -115,29 +116,38 @@ The engine is modular, with different Python files handling specific aspects of 
 *   **Structure**:
     ```json
     {
-        "name": "My Test Level",
+        "map_name": "Test Level 1",
         "tiles": [
-            ["#", "#", ".", "#"],
-            ["#", ".", ".", "#"],
-            ["#", ".", "@", "#"], // @ might indicate a player start position or an entity
-            ["#", "#", "#", "#"]
+            ["#", "#", "#"],
+            ["#", ".", "#"],
+            ["#", "#", "#"]
         ],
         "heightmap": [
-            [1, 1, 0, 1],
-            [1, 0, 0, 1],
-            [1, 0, 0, 1],
-            [1, 1, 1, 1]
+            [1, 1, 1],
+            [1, 0, 1],
+            [1, 1, 1]
         ],
-        "entities_on_map": [ // Entities placed on this specific map
-            {"id": "player_char", "x": 2, "y": 2, "team": "player"},
-            {"id": "goblin_1", "x": 1, "y": 1, "team": "enemy", "ai_behavior": "move_towards_player"}
-        ],
-        "player_start_pos": {"x": 2, "y": 2} // Optional: specific start for player
+        "entities_on_map": [
+            {
+                "id": "player_char",
+                "x": 1,
+                "y": 1,
+                "is_player_start": true,
+                "faction": "player"
+            },
+            {
+                "id": "goblin_1",
+                "x": 2,
+                "y": 1,
+                "faction": "enemy",
+                "behavior": "aggressive_melee" // Example: specifying AI behavior
+            }
+        ]
     }
     ```
 *   `tiles`: 2D array of characters representing the visual appearance of map cells.
 *   `heightmap`: 2D array of integers (0-5) representing the elevation of each tile.
-*   `entities_on_map`: A list of dictionaries, each specifying an entity ID (linking to an entity JSON file), its position on the map, its team, and potentially overriding its default AI behavior.
+*   `entities_on_map`: A list of dictionaries, each specifying an entity ID (linking to an entity JSON file), its position on the map, its team, and potentially overriding its default AI behavior via the `behavior` key.
 
 ## 4. Game Engine (`engine.py`)
 
@@ -149,18 +159,12 @@ The engine is modular, with different Python files handling specific aspects of 
 *   **Purpose**: Represents any character or object in the game that can act or be interacted with (players, NPCs, potentially items).
 *   **Attributes**:
     *   `id` (unique identifier, often from the filename like "player_char")
-    *   `name` (display name)
-    *   `char` (ASCII representation)
-    *   `color`
-    *   `x`, `y` (coordinates on the map)
-    *   `hp` (health points)
-    *   `max_hp`
-    *   `ap` (action points)
-    *   `max_ap`
-    *   `abilities` (list of strings, e.g., `"pistol_shot"`)
-    *   `description`
-    *   `ai_behavior` (`None`, `"move_towards_player"`, `"run_away"`)
-    *   `team` (`"player"`, `"enemy"`, `"neutral"`)
+    *   `name`, `x`, `y`, `char`, `color`
+    *   `hp`, `max_hp`, `ap`, `current_ap`, `defense`
+    *   `abilities_ids`, `abilities` (list of `Ability` objects)
+    *   `faction`, `sight_radius`
+    *   `is_dead`, `status_effects`
+    *   `behavior: Behavior | None` (an instance of an AI behavior strategy, e.g., `AggressiveMelee`, `Cautious`. `None` for player-controlled entities).
     *   `height` (current height level the entity is on, derived from map)
 *   **Methods**:
     *   `move(dx, dy, game_map)`: Attempts to move the entity. Consumes AP. Checks for collisions and height differences.
@@ -189,59 +193,31 @@ The engine is modular, with different Python files handling specific aspects of 
 ### GameEngine Class (`GameEngine`)
 
 *   **Purpose**: Orchestrates the game simulation. Manages entities, turns, combat resolution, and AI.
-*   **Attributes**:
-    *   `game_map` (an instance of `GameMap`)
-    *   `entities` (list of all `Entity` instances in the current game)
-    *   `player` (reference to the player's `Entity` instance)
-    *   `current_turn_index` (index in the `entities` list for whose turn it is)
-    *   `turn_order` (potentially a sorted list of entities for turn management)
-    *   `data_manager` (instance of `DataManager` for loading entity stats)
-*   **Methods**:
-    *   `initialize_map(map_data)`: Sets up the `game_map` from loaded data.
-    *   `initialize_entities_from_map_data(map_entity_list)`: Creates `Entity` objects based on the `entities_on_map` section of map data, loading base stats from entity JSON files using `data_manager`.
-    *   `next_turn()`: Advances to the next entity's turn, refreshes AP for the new current entity.
-    *   `process_player_action(action_type, **kwargs)`: Handles input from the player (move, attack).
-    *   `process_npc_turn(npc_entity)`: Executes AI logic for an NPC.
-    *   `handle_movement(entity, dx, dy)`: Validates and executes movement, including height checks against `game_map.get_height()` and `entity.can_climb()`. Updates entity position and consumes AP.
-    *   `handle_attack(attacker, target, ability_name)`: Resolves an attack, calculates damage, applies it, consumes AP.
-    *   `get_entities_in_radius(center_x, center_y, radius)`: Finds entities within a certain range.
-    *   `get_path(start_pos, end_pos)`: Uses pathfinding (e.g., A*) considering walkability and height from `game_map`.
+*   **Key Methods**:
+    *   `initialize_entities_from_map_data()`: Loads entity definitions and map-specific entity data, creating `Entity` instances. Now also instantiates and assigns AI `Behavior` objects to NPCs based on the `behavior` string in map data, using the `create_behavior` factory from `ai.py`.
+    *   `_execute_action()`: Handles the logic for an entity performing an action using an ability.
+    *   `handle_player_action()`: Processes input for player actions.
+    *   `run_npc_turn()`: For NPCs, this method now consults the entity's assigned `behavior` object (e.g., `AggressiveMelee`) to determine the NPC's action for the turn by calling its `choose_action()` method.
+    *   `next_turn()`: Advances the game to the next entity's turn.
+    *   `find_path()`: Calculates a path between two points.
+    *   `is_target_in_ability_range()`: Checks ability range.
 
-### Combat System
+## 5. AI System (`ai.py`)
 
-*   **Round-Based**: Combat proceeds in turns. Each entity gets a turn to perform actions.
-*   **Action Points (AP)**: Entities have AP, which is spent on actions like moving and attacking. AP regenerates at the start of an entity's turn.
-*   **Abilities**:
-    *   Entities have a list of abilities (e.g., `"pistol_shot"`).
-    *   Each ability would ideally have properties like range, AP cost, damage, area of effect (not yet implemented).
-    *   Currently, "pistol_shot" is a basic ranged attack with fixed range and damage.
-*   **Resolution**: When an entity attacks, the `GameEngine` checks range, AP, and then applies damage to the target's HP.
-*   **Line of Sight (LOS)**: (Future Feature) Attacks may require LOS.
+*   **Purpose**: Defines the artificial intelligence for Non-Player Characters (NPCs) using a Strategy design pattern. This allows for different behaviors to be easily assigned to entities.
+*   **Core Components**:
+    *   `Behavior` (Abstract Base Class): Defines the interface for all AI behaviors, primarily through the `choose_action(owner: Entity, engine: GameEngine)` method. This method is expected to return a tuple containing the `Ability` to use and the `target_position`, or `None` if no action is to be taken.
+    *   Concrete Behavior Classes (e.g., `AggressiveMelee`, `Cautious`, `Defensive`):
+        *   `AggressiveMelee`: NPCs will try to attack the player if in melee range. If not, they will attempt to move closer to the player.
+        *   `Cautious`: NPCs will try to maintain a preferred distance from the player. They may attack if the player is at a medium range but will retreat if the player gets too close.
+        *   `Defensive`: NPCs will generally stay in place (around a guard position) and attack the player only if they come within a certain radius. They will move back to their guard position if they stray too far.
+    *   `create_behavior(behavior_name: str, **kwargs) -> Behavior`: A factory function that takes a string (e.g., "aggressive_melee", "cautious") and returns an instance of the corresponding behavior class. This is used by the `GameEngine` when initializing entities.
+*   **Interaction**:
+    *   The `GameEngine` assigns a `Behavior` instance to each NPC `Entity` during initialization, based on data from map files.
+    *   During an NPC's turn (`run_npc_turn` in `GameEngine`), the engine calls the `choose_action` method of the NPC's `behavior` object.
+    *   The chosen action (ability and target) is then executed by the `GameEngine`.
 
-### Turn Management
-
-*   The `GameEngine` maintains a list of entities.
-*   `current_turn_index` points to the entity whose turn it is.
-*   After an entity completes its actions or runs out of AP, `next_turn()` is called.
-*   Player turn allows for direct input; NPC turns are automated by AI.
-
-### NPC AI
-
-*   Managed by `GameEngine.process_npc_turn()`.
-*   Based on `entity.ai_behavior`:
-    *   `"move_towards_player"`: NPC attempts to find a path to the player and move along it. If in range, it might attack.
-    *   `"run_away"`: NPC attempts to find a path away from the player.
-*   Pathfinding (`get_path_to` in `Entity` or a utility function called by `GameEngine`) is crucial for AI movement. It needs to consider map walkability and height differences.
-
-### Height System
-
-*   Implemented via `game_map.heightmap`. Each tile has a height from 0 to `MAX_HEIGHT_LEVEL` (e.g., 5).
-*   Entities can climb up or down one height level at a time per move.
-    *   `entity.can_climb(current_tile_height, next_tile_height)` checks this.
-    *   Movement cost might be affected by height changes (not yet implemented).
-*   Height can affect visibility and range for attacks (future feature).
-
-## 5. Renderer (`renderer.py`)
+## 6. Renderer (`renderer.py`)
 
 *   **Purpose**: Handles all drawing to the screen using Pygame.
 *   **Key Class**: `Renderer`.
@@ -273,7 +249,7 @@ The engine is modular, with different Python files handling specific aspects of 
     *   The `Renderer` uses camera offsets to draw only the visible portion of the map and entities.
     *   Input handling in `Game` and `Editor` updates camera coordinates (e.g., arrow keys to pan).
 
-## 6. User Interface (`ui.py`)
+## 7. User Interface (`ui.py`)
 
 *   **Purpose**: Manages and renders all UI elements for different game states.
 *   **Key Classes**: `MainMenu`, `MapSelectionScreen`, `GameUI`, `EditorUI`, `Button`.
@@ -315,7 +291,7 @@ The engine is modular, with different Python files handling specific aspects of 
     *   Coordinates display.
 *   **Logic**: Provides interface for map editing tools in `Editor`.
 
-## 7. Game Logic (`game.py`)
+## 8. Game Logic (`game.py`)
 
 *   **Purpose**: Manages the "game" state, integrating the `GameEngine`, `GameUI`, and `Renderer`.
 *   **Key Class**: `Game`.
@@ -355,7 +331,7 @@ The engine is modular, with different Python files handling specific aspects of 
     *   Mouse clicks: Select entities, UI buttons, target locations.
     *   Keyboard shortcuts for actions.
 
-## 8. Map Editor (`editor.py`)
+## 9. Map Editor (`editor.py`)
 
 *   **Purpose**: Allows users to create and modify game maps.
 *   **Key Class**: `Editor`.
@@ -409,7 +385,7 @@ The engine is modular, with different Python files handling specific aspects of 
 *   Uses `DataManager` to interact with JSON files in `data/maps/`.
 *   UI provides prompts for filenames.
 
-## 9. Interaction Flow Example (Starting a Game)
+## 10. Interaction Flow Example (Starting a Game)
 
 1.  **`main.py`**: Starts, displays `MainMenu` (via `ui.py` and `renderer.py`).
 2.  User clicks "Start Game".
@@ -442,11 +418,11 @@ The engine is modular, with different Python files handling specific aspects of 
 
 This detailed breakdown should provide a comprehensive understanding of the engine's systems and their interactions.
 
-## 10. Programmatic Deep Dives
+## 11. Programmatic Deep Dives
 
 This section provides a closer look at the code implementation of key systems.
 
-### 10.1 `config.py` - Configuration Hub
+### 11.1 `config.py` - Configuration Hub
 
 The `config.py` file centralizes static settings for the game, ensuring consistency across modules. It primarily defines constants.
 
@@ -465,7 +441,7 @@ The `config.py` file centralizes static settings for the game, ensuring consiste
     ```
 *   **Game Mechanics**: `MAX_CLIMB_HEIGHT_DIFFERENCE`, `MAX_MAP_HEIGHT_LEVEL`.
 
-### 10.2 `utils.py` - Utility Belt
+### 11.2 `utils.py` - Utility Belt
 
 Contains standalone helper functions.
 
@@ -483,7 +459,7 @@ Contains standalone helper functions.
 *   **Value Clamping**: `clamp(value, min_val, max_val)`.
 *   **Coordinate Conversion**: `grid_to_pixel(grid_x, grid_y, tile_size)` and `pixel_to_grid(pixel_x, pixel_y, tile_size)`.
 
-### 10.3 `data_manager.py` - Data Persistence
+### 11.3 `data_manager.py` - Data Persistence
 
 Handles loading and saving game data, primarily in JSON format.
 
@@ -518,7 +494,7 @@ Handles loading and saving game data, primarily in JSON format.
         *   `load_entity_data` correctly handles if `entity_filename_or_id` already includes `.json`.
 *   **Listing Available Data**: `list_available_maps()` and `list_available_entities()` scan respective directories for `.json` files and return names without the extension.
 
-### 10.4 `engine.py` - Core Game Logic
+### 11.4 `engine.py` - Core Game Logic
 
 This is the heart of the gameplay simulation, defining entities, the map structure, and the rules governing their interaction.
 
@@ -597,7 +573,7 @@ Orchestrates entities, turns, and game rules.
     *   `get_current_game_state()`: Returns the current state string, re-evaluating win/loss.
 *   **Utility Methods**: `get_valid_moves(entity)`, `get_attack_range(entity, ability_name)` provide data for UI highlighting.
 
-### 10.5 `renderer.py` - Visual Output
+### 11.5 `renderer.py` - Visual Output
 
 Responsible for drawing everything to the screen using Pygame.
 
@@ -620,7 +596,7 @@ Responsible for drawing everything to the screen using Pygame.
     *   **Highlights**: If `action_mode` is "move" or "attack", draws semi-transparent rectangles on `highlighted_tiles_move` or `highlighted_tiles_attack`.
     *   **Entities**: Iterates `game_engine.entities`. Renders `entity.char` with color from `_get_entity_color()`. Applies a small visual Y-offset based on `game_map.get_height(entity.x, entity.y)`. Highlights `current_turn_entity` and `selected_entity`.
 
-### 10.6 `ui.py` - User Interface Elements
+### 11.6 `ui.py` - User Interface Elements
 
 Manages different UI screens (menus, game HUD).
 
@@ -656,7 +632,15 @@ Manages different UI screens (menus, game HUD).
     #     self.draw_text(f"AP: {player.ap}/{player.max_ap}", self.font_small, self.ap_color, ...)
     ```
 
-### 10.7 `game.py` - Gameplay Orchestration
+#### `EditorUI` Class (inherits `BaseInterface`)
+
+*   **State**: Similar to before, but now includes `dialog_state` for save/load dialogs.
+*   **Drawing (`draw`)**:
+    *   Renders the map grid and entities as in the previous version.
+    *   Draws UI panels for tile selection, entity placement, and height adjustment.
+    *   Displays messages or dialog boxes for actions like saving/loading.
+
+### 11.7 `game.py` - Gameplay Orchestration
 
 Manages the active game session, acting as a bridge between the `GameEngine`, `Renderer`, and `GameUI`.
 
@@ -686,7 +670,7 @@ Manages the active game session, acting as a bridge between the `GameEngine`, `R
     *   Calls `self.ui.draw(...)` to render the game interface.
 *   **Messaging (`set_message`)**: Adds messages to `self.game_messages` with a display timer. `duration = -1` for persistent.
 
-### 10.8 `editor.py` - Map Creation Tool
+### 11.8 `editor.py` - Map Creation Tool
 
 Provides an interface for users to design game maps.
 
@@ -726,7 +710,7 @@ Provides an interface for users to design game maps.
     # # ... drawing tile background, char, height number within this rect ...
     ```
 
-### 10.9 `main.py` - Application Entry Point
+### 11.9 `main.py` - Application Entry Point
 
 Orchestrates the high-level game states (main menu, map selection, game, editor) and transitions between them.
 

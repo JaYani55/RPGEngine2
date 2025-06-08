@@ -82,7 +82,7 @@ class Game:
                 self.action_mode = "select" # Default to select mode
                 if self.player and self.engine: # Ensure engine is available
                     reachable_tiles_data = self.engine.get_reachable_tiles_with_ap_cost(self.player)
-                    self.highlighted_tiles_move = list(reachable_tiles_data.keys())
+                    self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data] # Corrected line
             print(f"Game state loaded successfully for map: {self.current_map_name}. Player: {self.player.name}")
 
         except Exception as e:
@@ -120,7 +120,7 @@ class Game:
                 # Refresh player's available moves
                 if self.engine:
                     reachable_tiles_data = self.engine.get_reachable_tiles_with_ap_cost(self.player)
-                    self.highlighted_tiles_move = list(reachable_tiles_data.keys())
+                    self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data]
 
 
     def handle_input(self, event):
@@ -167,7 +167,7 @@ class Game:
                             self.action_mode = "ability_target"
                             self.highlighted_tiles_move = [] # Clear move highlights
                             if self.engine:
-                                self.highlighted_tiles_ability = self.engine.get_ability_range_tiles(self.player, self.selected_ability)
+                                self.highlighted_tiles_ability = self.engine.get_valid_targets_for_ability(self.player, self.selected_ability)
                         else:
                             self.set_message(f"Not enough AP for {clicked_ability.name}.", 60)
                         return # Action handled
@@ -183,7 +183,7 @@ class Game:
                             if success:
                                 # Refresh highlights after move
                                 reachable_data = self.engine.get_reachable_tiles_with_ap_cost(self.player)
-                                self.highlighted_tiles_move = list(reachable_data.keys())
+                                self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_data] # Corrected line
                                 if not self.highlighted_tiles_move or self.player.current_ap == 0:
                                     self.action_mode = "select" # Or end turn if no AP
                             # If player has no more AP, or no valid moves, consider changing action_mode or prompting End Turn
@@ -203,7 +203,7 @@ class Game:
                                 self.highlighted_tiles_ability = []
                                 # Refresh move highlights as AP might have changed
                                 reachable_data = self.engine.get_reachable_tiles_with_ap_cost(self.player)
-                                self.highlighted_tiles_move = list(reachable_data.keys())
+                                self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_data] # Corrected line
                                 if self.player.current_ap == 0:
                                     self.set_message("Out of AP. End your turn.", 90)
                                     self.highlighted_tiles_move = []
@@ -217,7 +217,7 @@ class Game:
                     self.highlighted_tiles_ability = []
                     if self.selected_entity and self.selected_entity == self.player and self.engine:
                          reachable_tiles_data = self.engine.get_reachable_tiles_with_ap_cost(self.selected_entity)
-                         self.highlighted_tiles_move = list(reachable_tiles_data.keys())
+                         self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data] # Corrected line
                     else:
                         self.highlighted_tiles_move = []
                     self.hovered_tile_info = None
@@ -240,7 +240,7 @@ class Game:
                             self.action_mode = "ability_target"
                             self.highlighted_tiles_move = []
                             if self.engine:
-                                self.highlighted_tiles_ability = self.engine.get_ability_range_tiles(self.player, self.selected_ability)
+                                self.highlighted_tiles_ability = self.engine.get_valid_targets_for_ability(self.player, self.selected_ability)
                         else:
                             self.set_message(f"Not enough AP for {ability_to_select.name}.", 60)
                         return
@@ -267,14 +267,17 @@ class Game:
 
             if self.game_state != "player_turn" and self.engine.game_state == self.game_state: # Ensure it's still NPC turn
                 current_npc = self.engine.get_current_turn_entity()
+                print(f"GAME_DEBUG: Update loop - NPC turn. Current NPC: {current_npc.name if current_npc else 'None'}. Game state: {self.game_state}") # DEBUG
                 if current_npc and not current_npc.is_dead:
                     # For sequential actions, this would be more complex.
-                    # For now, run_npc_behavior handles the full turn.
-                    action_taken, message = self.engine.run_npc_behavior(current_npc)
-                    if message:
-                        self.set_message(message, 60)
+                    # For now, run_npc_turn handles the full turn.
+                    print(f"GAME_DEBUG: Calling engine.run_npc_turn for {current_npc.name}") # DEBUG
+                    self.engine.run_npc_turn(current_npc) # Changed from run_npc_behavior
+                    # The message handling might need adjustment if run_npc_turn doesn't return one,
+                    # or if messages are logged directly by the engine/AI.
+                    # For now, assuming direct logging is sufficient.
                     
-                    # run_npc_behavior should call next_turn internally if it finishes its actions or runs out of AP.
+                    # run_npc_turn should call next_turn internally if it finishes its actions or runs out of AP.
                     # So, we just need to sync the game_state.
                     self.game_state = self.engine.game_state 
 
@@ -283,7 +286,7 @@ class Game:
                          self.action_mode = "select"
                          if self.engine:
                             reachable_tiles_data = self.engine.get_reachable_tiles_with_ap_cost(self.player)
-                            self.highlighted_tiles_move = list(reachable_tiles_data.keys())
+                            self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data] # Corrected line
             
             # If engine state changed to player turn (e.g. after NPC turn), ensure UI reflects this
             elif self.game_state == "player_turn" and self.engine.game_state == "player_turn":
@@ -292,7 +295,7 @@ class Game:
                     self.action_mode = "select"
                     if self.engine:
                         reachable_tiles_data = self.engine.get_reachable_tiles_with_ap_cost(self.player)
-                        self.highlighted_tiles_move = list(reachable_tiles_data.keys())
+                        self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data] # Corrected line
 
 
         if self.game_state in ["game_over_player_win", "game_over_player_lose"] and self.is_running:

@@ -9,7 +9,8 @@
     "max_ap": 5,
     "abilities": [
         "move",
-        "pistol_shot"
+        "pistol_shot",
+        "Deathstare"
     ],
     "behavior": "player_controlled"
 }
