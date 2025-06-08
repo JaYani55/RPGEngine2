@@ -11,6 +11,7 @@ from data_manager import (
 )
 from utils import pixel_to_grid, grid_to_pixel
 from abilities import ABILITIES_REGISTRY, get_ability, TargetType # ABILITIES_REGISTRY for listing, TargetType for editor
+from tiles import get_available_tile_chars
 
 # Editor specific constants
 EDITOR_TILE_SIZE = TILE_SIZE + 4 # Slightly larger for better clicking
@@ -50,7 +51,7 @@ class Editor:
         self.zoom_level = 1.0 # Not implemented yet
 
         self.editing_mode = "tiles"  # "tiles", "heights", "entities", "select"
-        self.available_tile_chars = ["." , "#", "w", "~", "T"] # Floor, Wall, Water, Tree
+        self.available_tile_chars = get_available_tile_chars() # Use the imported function
         self.current_tile_char_index = 0
         self.current_height_value = 0 # 0 to 5
         
