@@ -74,8 +74,10 @@ def main():
                     if current_state == "game":
                         if data: # data here is the map_name
                             selected_map_for_game = data
-                            # game.load_game_state(selected_map_for_game) # We'll implement this next
-                            pygame.display.set_caption(f"ASCII RPG - Game ({selected_map_for_game})")
+                            # Reset game state before attempting to load a new map
+                            game.reset()
+                            game.game_state = "loading" # Explicitly set to loading
+                            pygame.display.set_caption(f"ASCII RPG - Loading ({selected_map_for_game})...")
                         else: # Should not happen if logic is correct
                             current_state = "main_menu" 
                             pygame.display.set_caption("ASCII RPG - Main Menu")
@@ -85,12 +87,15 @@ def main():
 
 
         elif current_state == "game":
-            # Initialize game with selected map if not already done
-            # This is a bit of a placeholder, actual loading should happen once
-            if selected_map_for_game and not game.is_initialized(): # Add is_initialized to Game class
+            # Attempt to load the game if a map is selected and the game isn't initialized
+            # and not already in a persistent critical error state from a previous attempt.
+            if selected_map_for_game and not game.is_initialized() and \
+               game.game_state not in ["critical_error_no_player", "critical_error", "load_error"]:
                 game.load_game_state(selected_map_for_game)
 
+            # After attempting to load (or if already loaded/failed):
             if game.is_initialized():
+                # Game is loaded and ready, run the game loop
                 for event in events:
                     game.handle_input(event)
                 game.update()
@@ -98,17 +103,31 @@ def main():
                 if game.is_over(): 
                     current_state = "main_menu"
                     selected_map_for_game = None # Reset selected map
-                    game.reset() # Add a reset method to Game class
+                    game.reset() 
                     pygame.display.set_caption("ASCII RPG - Main Menu")
-            else:
-                # Handle case where game couldn't initialize (e.g. map load failed)
-                # For now, just go back to map selection or main menu
-                font = pygame.font.Font(None, 36)
-                text = font.render(f"Error: Game not initialized. Map: {selected_map_for_game}", True, (255,0,0))
-                text_rect = text.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
-                screen.blit(text, text_rect)
-                # Potentially add a timer or key press to go back
-                # For simplicity, this state will persist until ESC is pressed (handled globally)
+            else: # Game is NOT initialized
+                # Game is not initialized. Check why.
+                if game.game_state in ["critical_error_no_player", "critical_error", "load_error"]:
+                    # A critical error occurred during loading. Transition out of "game" state.
+                    print(f"MAIN_LOOP: Critical game load error: {game.game_state}. Returning to map selection.")
+                    
+                    # Force transition to map selection:
+                    current_state = "map_selection"
+                    selected_map_for_game = None # Crucial to prevent reloading the same bad map
+                    game.reset() # Reset game's internal state (sets _initialized=False, game_state="loading")
+                    
+                    # Ensure map_selection_screen is ready
+                    # Assuming map_selection_screen is defined in the scope and has load_available_maps
+                    if 'map_selection_screen' in locals() and hasattr(map_selection_screen, 'load_available_maps'):
+                        map_selection_screen.load_available_maps() 
+                    
+                    pygame.display.set_caption("ASCII RPG - Select Map")
+                else:
+                    # Game is not initialized, but not due to a critical load error.
+                    # This could be initial state ("loading" but no map selected yet to trigger load_game_state),
+                    # or game.load_game_state() hasn't been called yet in this cycle.
+                    # A black screen will be shown as game.draw() will likely return early.
+                    pass
 
 
         elif current_state == "editor":

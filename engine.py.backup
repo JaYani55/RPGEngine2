@@ -140,9 +140,7 @@ class GameEngine:
             self.game_log.pop(0) # Remove the oldest message
         self.game_log.append({'message': message, 'turn': self.current_game_turn})
         print(f"ENGINE_LOG (Turn {self.current_game_turn}): {message}")
-        
-
-    def _start_entity_turn(self, entity: Entity):
+            def _start_entity_turn(self, entity: Entity):
         """Resets AP for the entity whose turn is starting and sets game state."""
         entity.current_ap = entity.ap # Reset current_ap to max_ap (which is stored in entity.ap)
         self.add_log_message(f"{entity.name}'s turn begins (AP: {entity.current_ap}).")
@@ -477,10 +475,10 @@ class GameEngine:
         # The renderer will need to know the effect_radius if it's to draw the AoE preview.
         return list(set(in_range_tiles)) # Remove duplicates
 
-    def get_blocking_entity_at(self, x: int, y: int, exclude_entity: Entity | None = None) -> Entity | None:
+    def get_blocking_entity_at(self, x: int, y: int) -> Entity | None:
         """Returns the entity at the given coordinates if it blocks movement, otherwise None."""
         for entity in self.entities:
-            if entity.x == x and entity.y == y and not entity.is_dead and entity != exclude_entity: # Consider dead entities as non-blocking and exclude specific entity
+            if entity.x == x and entity.y == y and not entity.is_dead: # Consider dead entities as non-blocking
                 return entity
         return None
 
@@ -525,9 +523,9 @@ class GameEngine:
                     # Execute ability effect
                     target_entity = self.get_blocking_entity_at(target_pos[0], target_pos[1])
                     if target_entity:
-                        # Apply damage or effect based on ability damage
-                        if ability_to_use.damage_amount > 0:
-                            damage = ability_to_use.damage_amount
+                        # Apply damage or effect based on ability.type
+                        if ability_to_use.type == "attack":
+                            damage = ability_to_use.parameters.get("damage", 0)
                             target_entity.take_damage(damage)
                             message = f"{self.player.name} used {ability_to_use.name} on {target_entity.name} for {damage} damage. AP left: {self.player.current_ap}."
                             if target_entity.is_dead:
@@ -555,12 +553,14 @@ class GameEngine:
         if success and self.player.current_ap <= 0 and self.game_state == "player_turn":
             self.log_message(f"{self.player.name} has 0 AP. Ending turn automatically.")
             self.end_player_turn()
-            # Message about auto turn end is already logged.        self.check_game_over_conditions()
+            # Message about auto turn end is already logged.
+
+        self.check_game_over_conditions()
         return success, message
 
     def run_npc_behavior(self, npc: Entity):
         if npc.is_dead or self.game_state != "npc_turn" or self.get_current_turn_entity() != npc:
-            return False, f"{npc.name} cannot act (dead or not their turn)."
+            return
 
         self.log_message(f"--- {npc.name}'s turn (AP: {npc.current_ap}) ---")
         actions_taken_this_turn = 0
@@ -571,14 +571,13 @@ class GameEngine:
             # Basic AI: If player is in sight, try to attack. If not, move towards player.
             # More complex AI would involve evaluating abilities, positions, etc.
 
-            if self.player and not self.player.is_dead:                # 1. Check if any attack ability can hit the player
+            if self.player and not self.player.is_dead:
+                # 1. Check if any attack ability can hit the player
                 can_attack_player = False
                 attack_ability_to_use: Ability | None = None
                 
                 for ability in npc.abilities:
-                    # Consider an ability an attack if it deals damage and isn't a movement ability
-                    is_attack_ability = ability.damage_amount > 0 and ability.id_name != "move"
-                    if is_attack_ability and npc.current_ap >= ability.ap_cost:
+                    if ability.type == "attack" and npc.current_ap >= ability.ap_cost:
                         if self.is_target_in_ability_range(npc, ability, (self.player.x, self.player.y)):
                             # Check for line of sight if ability requires it (not implemented yet)
                             # For now, assume direct line of sight if in range.
@@ -587,10 +586,8 @@ class GameEngine:
                             break
                 
                 if can_attack_player and attack_ability_to_use:
-                    damage = attack_ability_to_use.damage_amount
-                    self.player.hp -= damage  # Simple damage application
-                    if self.player.hp <= 0:
-                        self.player.is_dead = True
+                    damage = attack_ability_to_use.parameters.get("damage", 0)
+                    self.player.take_damage(damage)
                     npc.current_ap -= attack_ability_to_use.ap_cost
                     log_msg = f"{npc.name} attacks {self.player.name} with {attack_ability_to_use.name} for {damage} damage. AP left: {npc.current_ap}."
                     self.log_message(log_msg)
@@ -653,87 +650,13 @@ class GameEngine:
                 break
             
             if self.check_game_over_conditions(): # Check game over after each action
-                return # Game over, stop processing        # End of NPC's actions for this turn
+                return # Game over, stop processing
+
+        # End of NPC's actions for this turn
         self.log_message(f"--- {npc.name}'s turn ends ---")
-        
-        # Advance to the next turn now that this NPC has finished its actions
-        self.next_turn()
-        
-        # Return whether any actions were taken and a summary message
-        return actions_taken_this_turn > 0, f"{npc.name} completed {actions_taken_this_turn} actions."
-
-    def find_path(self, start_x: int, start_y: int, end_x: int, end_y: int) -> list[tuple[int, int]] | None:
-        """
-        Simple pathfinding using breadth-first search (BFS).
-        Returns a list of (x, y) coordinates representing the path from start to end.
-        Returns None if no path is found.
-        """
-        if start_x == end_x and start_y == end_y:
-            return [(start_x, start_y)]
-        
-        if not self.game_map.is_valid(end_x, end_y) or not self.game_map.is_walkable(end_x, end_y):
-            return None
-        
-        from collections import deque
-        queue = deque([(start_x, start_y, [(start_x, start_y)])])
-        visited = {(start_x, start_y)}
-        
-        while queue:
-            x, y, path = queue.popleft()
-            
-            # Check all 4 cardinal directions
-            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
-                nx, ny = x + dx, y + dy
-                
-                if (nx, ny) in visited:
-                    continue
-                
-                if not self.game_map.is_valid(nx, ny) or not self.game_map.is_walkable(nx, ny):
-                    continue
-                
-                # Check for blocking entities (but allow movement to the target even if player is there)
-                blocking_entity = self.get_blocking_entity_at(nx, ny)
-                if blocking_entity and (nx, ny) != (end_x, end_y):
-                    continue
-                
-                # Check height difference for climbing
-                current_height = self.game_map.get_height(x, y)
-                target_height = self.game_map.get_height(nx, ny)
-                if target_height - current_height > MAX_CLIMB_HEIGHT_DIFF:
-                    continue
-                
-                new_path = path + [(nx, ny)]
-                
-                if nx == end_x and ny == end_y:
-                    return new_path
-                
-                visited.add((nx, ny))
-                queue.append((nx, ny, new_path))
-        
-        return None  # No path found
-
-    def is_target_in_ability_range(self, entity: Entity, ability: Ability, target_pos: tuple[int, int]) -> bool:
-        """
-        Check if a target position is within the range of an ability for the given entity.
-        """
-        if not ability:
-            return False
-        
-        entity_pos = (entity.x, entity.y)
-        distance = manhattan_distance(entity_pos, target_pos)
-        return distance <= ability.range
-
-    def log_message(self, message: str):
-        """
-        Simple logging method that delegates to add_log_message.
-        This provides compatibility for code that calls log_message instead of add_log_message.
-        """
-        self.add_log_message(message)
-
-    def end_player_turn(self):
-        """
-        End the player's turn and advance to the next entity.
-        """
-        if self.player:
-            self.log_message(f"{self.player.name}'s turn ends. AP remaining: {self.player.current_ap}")
-        self.next_turn()
+        # The game loop in game.py will call next_turn() after a delay or immediately.
+        # For now, next_turn() is implicitly called by the game loop structure.
+        # If we want NPCs to fully end their turn here, we'd call self.next_turn()
+        # but that might make the game loop in game.py more complex.
+        # Let's assume game.py's update loop handles advancing to the next entity.
+        # This function just performs the NPC's actions for *its* current turn.

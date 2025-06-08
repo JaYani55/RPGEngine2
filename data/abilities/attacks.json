@@ -1,0 +1,12 @@
+{
+  "pistol_shot": {
+    "name": "Pistol Shot",
+    "ap_cost": 2,
+    "range": 5,
+    "damage_amount": 10,
+    "damage_type": "physical",
+    "target_type": "ENEMY",
+    "description": "A standard ranged attack with a pistol. Deals 10 physical damage.",
+    "effect_radius": 0
+  }
+}

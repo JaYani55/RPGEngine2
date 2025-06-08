@@ -1,0 +1,15 @@
+{
+    "id": "player_char",
+    "name": "Goblin",
+    "char": "g",
+    "description": "A sneaky goblin with a penchant for mischief.",
+    "hp": 30,
+    "max_hp": 30,
+    "ap": 3,
+    "max_ap": 5,
+    "abilities": [
+        "move",
+        "pistol_shot"
+    ],
+    "behavior": "player_controlled"
+}

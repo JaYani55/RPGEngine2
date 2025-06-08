@@ -8,10 +8,12 @@ class Renderer:
         try:
             self.font = pygame.font.Font(FONT_NAME, FONT_SIZE)
             self.small_font = pygame.font.Font(FONT_NAME, FONT_SIZE - 4) # For height numbers
+            self.tooltip_font = pygame.font.Font(FONT_NAME, FONT_SIZE - 2) # For AP cost tooltips
         except pygame.error as e:
             print(f"Error loading font: {e}. Using default font.")
             self.font = pygame.font.Font(None, FONT_SIZE + 4) # Pygame default font
             self.small_font = pygame.font.Font(None, FONT_SIZE)
+            self.tooltip_font = pygame.font.Font(None, FONT_SIZE + 2)
 
         self.tile_colors = {
             "#": COLORS.get("wall", (100, 100, 100)),
@@ -29,21 +31,29 @@ class Renderer:
             "ability": COLORS.get("highlight_ability", (255, 150, 0, 120)), # New for ability range
             "aoe_effect": COLORS.get("highlight_aoe", (255, 100, 0, 70)), # For AoE preview
             "selected": COLORS.get("highlight_selected", (255, 255, 0, 100)),
-            "current_turn": COLORS.get("highlight_current_turn", (200, 200, 200, 80))
-        }
+            "current_turn": COLORS.get("highlight_current_turn", (200, 200, 200, 80))        }
         self.map_render_offset_y = 0 # Initialize map_render_offset_y, game.py uses this
 
     def _get_entity_color(self, entity):
-        if entity.behavior == "player_controlled":
-            return self.entity_colors["player"]
-        # Basic check for enemy (can be improved with factions or specific tags)
-        elif entity.behavior in ["move_towards_player", "run_away_from_player"]:
-            return self.entity_colors["enemy"]
-        # Add more types like "npc_friendly" if behaviors are expanded
+        # Check if this is the player entity (we'll need to pass this info from the game engine)
+        # For now, use faction and other available attributes
+        if hasattr(entity, 'faction'):
+            if entity.faction == "player":
+                return self.entity_colors["player"]
+            elif entity.faction == "enemy":
+                return self.entity_colors["enemy"]
+            elif entity.faction == "friendly":
+                return self.entity_colors["npc_friendly"]
+        
+        # Fallback: use the entity's own color if available
+        if hasattr(entity, 'color') and entity.color:
+            return entity.color
+            
         return self.entity_colors["default"]
 
     def draw_game_state(self, game_engine, selected_entity, highlighted_tiles_move, 
-                        highlighted_tiles_ability, action_mode, selected_ability: Ability | None):
+                        highlighted_tiles_ability, action_mode, selected_ability: Ability | None,
+                        hovered_tile_info: dict | None = None): # Added hovered_tile_info
         game_map = game_engine.game_map
         entities = game_engine.entities
         current_turn_entity = game_engine.get_current_turn_entity()
@@ -145,3 +155,25 @@ class Renderer:
                 # Optional: Draw HP bar or AP count near entity
                 # hp_text = self.small_font.render(f"HP:{entity.hp}", True, entity_color)
                 # self.screen.blit(hp_text, (char_rect.left, char_rect.bottom + 1))
+
+        # 4. Draw Hover Information (e.g., AP cost for movement)
+        if hovered_tile_info and 'cost' in hovered_tile_info:
+            cost_text = f"AP: {hovered_tile_info['cost']}"
+            text_surface = self.tooltip_font.render(cost_text, True, COLORS.get("white"), COLORS.get("black"))
+            # Position tooltip near mouse cursor or the tile
+            mouse_x, mouse_y = pygame.mouse.get_pos() # Get current mouse position for tooltip
+            tooltip_rect = text_surface.get_rect(midleft=(mouse_x + 15, mouse_y))
+            
+            # Ensure tooltip stays on screen
+            if tooltip_rect.right > self.screen.get_width():
+                tooltip_rect.right = self.screen.get_width() - 5
+            if tooltip_rect.bottom > self.screen.get_height():
+                tooltip_rect.bottom = self.screen.get_height() - 5
+            
+            pygame.draw.rect(self.screen, COLORS.get("black"), tooltip_rect.inflate(4,4)) # Small background for readability
+            self.screen.blit(text_surface, tooltip_rect)
+
+        # Path drawing for hovered_tile_info can be added here if 'path' is populated
+        # if hovered_tile_info and 'path' in hovered_tile_info and hovered_tile_info['path']:
+        #     # Draw lines between path segments
+        #     pass

@@ -1,0 +1,8 @@
+- fix: bugged ability editor (crash)
+- Refactor all entities to be created and loaded from json files and editable (Abilities)
+- Create Components and Systems in Hard coded Type.
+- Implement Stealth in shrubs and Collision
+- Implement shrubs and Tile Types
+- Implement Map picture and tiling map based on image size
+- fix: deselect abiltiy
+- fix: 

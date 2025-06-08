@@ -1,0 +1,15 @@
+{
+    "id": "goblin_1",
+    "name": "Goblin Grunt",
+    "char": "g",
+    "description": "A weak but feisty goblin, surprisingly also has a pistol.",
+    "hp": 30,
+    "max_hp": 30,
+    "ap": 3,
+    "max_ap": 3,
+    "abilities": [
+        "move",
+        "pistol_shot"
+    ],
+    "behavior": "move_towards_player"
+}

@@ -1,15 +1,5 @@
 venv/
 
-# Ignore contents of entities folder, but not the folder itself
-data/entities/*
-# Keep the .gitkeep file if you want to track the empty folder
-!data/entities/.gitkeep
-
-# Ignore contents of maps folder, but not the folder itself
-data/maps/*
-# Keep the .gitkeep file if you want to track the empty folder
-!data/maps/.gitkeep
-
 # Ignore Python cache files
 __pycache__/
 *.py[cod]
@@ -17,3 +7,4 @@ __pycache__/
 
 # Ignore VS Code specific settings
 .vscode/
+

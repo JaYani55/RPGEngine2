@@ -1,22 +1,23 @@
 import pygame
-from config import COLORS, FONT_NAME, FONT_SIZE, TILE_SIZE # Added TILE_SIZE
-from abilities import Ability # Added Ability
+from config import COLORS, FONT_NAME, FONT_SIZE, TILE_SIZE 
+from abilities import Ability 
+from typing import Optional, Dict
 
 class BaseInterface:
     def __init__(self, screen):
         self.screen = screen
         try:
-            self.font_large = pygame.font.Font(FONT_NAME, FONT_SIZE + 28) # e.g. 36+28 = 64
-            self.font_medium = pygame.font.Font(FONT_NAME, FONT_SIZE + 12) # e.g. 36+12 = 48
-            self.font_small = pygame.font.Font(FONT_NAME, FONT_SIZE)      # e.g. 36
-            self.font_tiny = pygame.font.Font(FONT_NAME, FONT_SIZE - 6)   # e.g. 30
+            self.font_large = pygame.font.Font(FONT_NAME, FONT_SIZE + 6)
+            self.font_normal = pygame.font.Font(FONT_NAME, FONT_SIZE)
+            self.font_small = pygame.font.Font(FONT_NAME, FONT_SIZE - 2)
+            self.tooltip_font = pygame.font.Font(FONT_NAME, FONT_SIZE - 3) # For ability AP cost tooltips
         except pygame.error as e:
-            print(f"Error loading font {FONT_NAME}: {e}. Using pygame default font.")
-            self.font_large = pygame.font.Font(None, 74)
-            self.font_medium = pygame.font.Font(None, 50)
-            self.font_small = pygame.font.Font(None, 36)
-            self.font_tiny = pygame.font.Font(None, 24)
-
+            print(f"Error loading font in BaseInterface: {e}. Using pygame default.")
+            self.font_large = pygame.font.Font(None, FONT_SIZE + 10)
+            self.font_normal = pygame.font.Font(None, FONT_SIZE + 4)
+            self.font_small = pygame.font.Font(None, FONT_SIZE + 2)
+            self.tooltip_font = pygame.font.Font(None, FONT_SIZE + 1) 
+            
     def draw_text(self, text, font, color, x, y, center=True, screen_ref=None):
         scr = screen_ref if screen_ref else self.screen
         text_surface = font.render(text, True, color)
@@ -58,7 +59,7 @@ class MainMenu(BaseInterface):
 
         for i, option in enumerate(self.options):
             color = self.selected_color if i == self.selected_option else self.normal_color
-            self.draw_text(option, self.font_medium, color, self.screen.get_width() // 2, 300 + i * 70)
+            self.draw_text(option, self.font_normal, color, self.screen.get_width() // 2, 300 + i * 70)
 
 class MapSelectionScreen(BaseInterface):
     def __init__(self, screen):
@@ -102,14 +103,14 @@ class MapSelectionScreen(BaseInterface):
         self.draw_text("Select Map", self.font_large, self.title_color, self.screen.get_width() // 2, 100)
 
         if not self.available_maps:
-            self.draw_text("No maps found in data/maps/", self.font_medium, self.error_color, self.screen.get_width() // 2, 250)
+            self.draw_text("No maps found in data/maps/", self.font_normal, self.error_color, self.screen.get_width() // 2, 250)
             self.draw_text("Create a map using the Editor first.", self.font_small, self.info_color, self.screen.get_width() // 2, 300)
             self.draw_text("Press ESC to return to Main Menu", self.font_small, self.info_color, self.screen.get_width() // 2, 350)
             return
 
         for i, map_name in enumerate(self.available_maps):
             color = self.selected_color if i == self.selected_map_index else self.normal_color
-            self.draw_text(map_name, self.font_medium, color, self.screen.get_width() // 2, 220 + i * 60)
+            self.draw_text(map_name, self.font_normal, color, self.screen.get_width() // 2, 220 + i * 60)
         
         self.draw_text("Up/Down to select, Enter to start, Esc for Main Menu", self.font_small, self.info_color, self.screen.get_width() // 2, self.screen.get_height() - 70)
 
@@ -120,163 +121,121 @@ class GameUI(BaseInterface):
         screen_w = self.screen.get_width()
         screen_h = self.screen.get_height()
 
-        # Define heights for different sections from bottom up
-        self.log_area_height = 70  # For game log, e.g. 3-4 lines
-        self.main_info_panel_height = 110 # For player stats, selected entity
-        self.ability_bar_total_height = 40 # Includes button height + padding for the bar area
-        self.ability_button_height = 30 # Actual button height
-        self.ability_button_width = 90 # Width of ability buttons
+        self.log_area_height = 70  
+        self.main_info_panel_height = 110 
+        self.ability_bar_total_height = 40 
+        self.ability_button_height = 30 
+        self.ability_button_width = 90 
+        self.ability_button_padding = 5
 
-        # 1. Log Area (at the very bottom of the screen)
-        self.log_area_rect = pygame.Rect(
-            0, screen_h - self.log_area_height,
-            screen_w, self.log_area_height
-        )
+        # Log Area Rect
+        self.log_area_rect = pygame.Rect(0, screen_h - self.log_area_height, screen_w, self.log_area_height)
 
-        # 2. Main Info Panel (sits above the log area)
-        self.main_info_panel_rect = pygame.Rect(
-            0, self.log_area_rect.top - self.main_info_panel_height,
-            screen_w, self.main_info_panel_height
-        )
+        # Main Info Panel Rect (above log area)
+        self.main_info_panel_rect = pygame.Rect(0, screen_h - self.log_area_height - self.main_info_panel_height, 
+                                              screen_w, self.main_info_panel_height)
 
-        # 3. Ability Bar (sits above the main info panel)
-        # Y position for the top of the ability bar area
-        self.ability_bar_y_position = self.main_info_panel_rect.top - self.ability_bar_total_height
+        # Ability Bar Rect (above main info panel)
+        self.ability_bar_rect = pygame.Rect(0, self.main_info_panel_rect.top - self.ability_bar_total_height,
+                                          screen_w, self.ability_bar_total_height)
         
-        # Colors
-        self.main_panel_bg_color = COLORS.get("ui_background", (40,40,50, 220)) # For main info panel
-        self.log_panel_bg_color = COLORS.get("log_area_bg", (25,25,35, 230)) # Darker for log panel
-        self.ability_bar_bg_color = COLORS.get("ability_bar_bg", (30,30,40, 210)) # BG for ability bar area
+        self.ability_buttons_rects = [] # To store rects for click detection
+        self.ability_buttons_start_x = 10 # Padding from left
+        self.ability_buttons_y = self.ability_bar_rect.top + (self.ability_bar_total_height - self.ability_button_height) // 2
 
-        self.text_color = COLORS.get("ui_text", (220,220,220))
-        self.selected_text_color = COLORS.get("yellow", (255,255,0))
-        self.hp_color = COLORS.get("green", (0,255,0))
-        self.ap_color = COLORS.get("blue", (100,100,255))
-        self.turn_color = COLORS.get("yellow", (255,255,0))
-        self.description_color = COLORS.get("cyan", (0, 200, 200))
-        self.ability_button_color = COLORS.get("ui_button", (70,70,90))
-        self.ability_button_hover_color = COLORS.get("ui_button_hover", (100,100,120))
-        self.ability_button_text_color = COLORS.get("ui_text", (220,220,220))
-        self.border_color = COLORS.get("ui_border", (80,80,100))
+        # End Round Button
+        self.end_round_button_width = 100 # Adjusted width
+        self.end_round_button_height = 30
+        # Positioned in the main info panel, to the right
+        self.end_round_button_x = screen_w - self.end_round_button_width - 15 # 15px padding from right
+        self.end_round_button_y = self.main_info_panel_rect.top + 10 # 10px from top of panel
+        self.end_round_button_rect = pygame.Rect(
+            self.end_round_button_x, self.end_round_button_y,
+            self.end_round_button_width, self.end_round_button_height
+        )
+        self.end_round_button_text = "End Turn"
+        self.button_font = self.font_small 
+        self.button_color = COLORS.get("button_normal", (70, 70, 90))
+        self.button_hover_color = COLORS.get("button_hover", (100, 100, 120))
+        self.button_text_color = COLORS.get("button_text", (230, 230, 230))
 
-        self.ability_buttons = [] # List of tuples: (pygame.Rect, Ability)
-        self.log_scroll_offset = 0
-        self.log_line_height = self.font_tiny.get_height() + 4
 
-    def draw(self, player, current_turn_entity, game_log, game_state, selected_entity_in_game, active_ability: Ability | None):
-        screen_w = self.screen.get_width()
-        screen_h = self.screen.get_height() # Define screen_h here
+    def draw(self, player, current_turn_entity, game_log, game_state, selected_entity_in_game, active_ability: Ability | None, hovered_ability_info: Optional[Dict[str, Ability]] = None):
+        # Draw panel backgrounds
+        pygame.draw.rect(self.screen, COLORS.get("ui_background", (20,20,30)), self.log_area_rect)
+        pygame.draw.rect(self.screen, COLORS.get("ui_background", (25,25,35)), self.main_info_panel_rect) # Slightly different color
+        pygame.draw.rect(self.screen, COLORS.get("ui_background", (20,20,30)), self.ability_bar_rect)
 
-        # --- 1. Log Area (Bottom) ---
-        log_panel_surface = pygame.Surface(self.log_area_rect.size, pygame.SRCALPHA)
-        log_panel_surface.fill(self.log_panel_bg_color)
-        self.screen.blit(log_panel_surface, self.log_area_rect.topleft)
-        pygame.draw.line(self.screen, self.border_color, self.log_area_rect.topleft, self.log_area_rect.topright, 2)
+        # Borders for panels
+        border_color = COLORS.get("ui_border", (80,80,100))
+        pygame.draw.rect(self.screen, border_color, self.log_area_rect, 1)
+        pygame.draw.rect(self.screen, border_color, self.main_info_panel_rect, 1)
+        pygame.draw.rect(self.screen, border_color, self.ability_bar_rect, 1)
 
-        log_render_start_x = self.log_area_rect.left + 10
-        log_render_start_y = self.log_area_rect.top + 8
-        max_lines_in_log_view = (self.log_area_rect.height - 16) // self.log_line_height # Padding top/bottom
-        
-        start_index = max(0, len(game_log) - max_lines_in_log_view - self.log_scroll_offset)
-        end_index = max(0, len(game_log) - self.log_scroll_offset)
-        visible_log_messages = game_log[start_index:end_index]
+        # Draw Game Log (simple example)
+        log_start_y = self.log_area_rect.top + 5
+        for i, entry in enumerate(game_log[-3:]): # Show last 3 log messages
+            self.draw_text(entry['message'], self.font_small, COLORS.get("text_dim"), 5, log_start_y + i * (self.font_small.get_linesize() -2), center=False)
 
-        current_log_y = log_render_start_y
-        for message in visible_log_messages: # Display oldest of visible messages at top
-            if current_log_y + self.log_line_height <= self.log_area_rect.bottom - 8:
-                self.draw_text(message, self.font_tiny, self.text_color, log_render_start_x, current_log_y, center=False)
-                current_log_y += self.log_line_height
-            else:
-                break
+        # Draw Player/Entity Info in Main Panel
+        info_x = 10
+        info_y_start = self.main_info_panel_rect.top + 10
+        line_height = self.font_normal.get_linesize()
 
-        # --- 2. Main Info Panel (Middle) ---
-        info_panel_surface = pygame.Surface(self.main_info_panel_rect.size, pygame.SRCALPHA)
-        info_panel_surface.fill(self.main_panel_bg_color)
-        self.screen.blit(info_panel_surface, self.main_info_panel_rect.topleft)
-        pygame.draw.line(self.screen, self.border_color, self.main_info_panel_rect.topleft, self.main_info_panel_rect.topright, 2)
+        display_entity = selected_entity_in_game if selected_entity_in_game else player # Show player if nothing selected
+        if display_entity:
+            self.draw_text(f"{display_entity.name}", self.font_normal, COLORS.get("ui_text_highlight"), info_x, info_y_start, center=False)
+            self.draw_text(f"HP: {display_entity.hp}/{display_entity.max_hp}", self.font_small, COLORS.get("ui_text"), info_x, info_y_start + line_height, center=False)
+            self.draw_text(f"AP: {display_entity.current_ap}/{display_entity.ap}", self.font_small, COLORS.get("ui_text"), info_x, info_y_start + line_height * 2, center=False)
+            # Add more info as needed (defense, status, etc.)
 
-        info_base_y = self.main_info_panel_rect.top + 10
-        line_height_info = self.font_small.get_height() + 3 # Based on font_small
-        padding_x = 20
-
-        # Player Stats (Left side)
-        if player:
-            self.draw_text(f"{player.name}", self.font_small, self.text_color, padding_x, info_base_y, center=False)
-            self.draw_text(f"HP: {player.hp}/{player.max_hp}", self.font_small, self.hp_color, padding_x, info_base_y + line_height_info, center=False)
-            self.draw_text(f"AP: {player.ap}/{player.max_ap}", self.font_small, self.ap_color, padding_x, info_base_y + line_height_info * 2, center=False)
-
-        # Current Turn Entity (Center-ish)
-        turn_text_x = screen_w // 3 + 20
+        # Draw Current Turn Entity
         if current_turn_entity:
-            turn_display_text = f"Turn: {current_turn_entity.name}"
-            if current_turn_entity == player:
-                turn_display_text += " (YOU)"
-            self.draw_text(turn_display_text, self.font_small, self.turn_color, turn_text_x, info_base_y, center=False)
+            turn_text = f"Turn: {current_turn_entity.name}"
+            self.draw_text(turn_text, self.font_small, COLORS.get("yellow"), self.main_info_panel_rect.centerx, self.main_info_panel_rect.top + 5, center=True)
 
-        # Selected Entity Info (Right side)
-        selected_info_x_start = screen_w // 2 + 60
-        if selected_entity_in_game:
-            self.draw_text(f"Selected: {selected_entity_in_game.name}", self.font_small, self.selected_text_color, selected_info_x_start, info_base_y, center=False)
-            self.draw_text(f"HP: {selected_entity_in_game.hp}/{selected_entity_in_game.max_hp}", self.font_small, self.hp_color, selected_info_x_start, info_base_y + line_height_info, center=False)
-            self.draw_text(f"AP: {selected_entity_in_game.ap}/{selected_entity_in_game.max_ap}", self.font_small, self.ap_color, selected_info_x_start + 130, info_base_y + line_height_info, center=False)
-            
-            if selected_entity_in_game.description:
-                desc_text = f"Desc: {selected_entity_in_game.description}"
-                max_desc_width = screen_w - selected_info_x_start - 15 
-                desc_y_start = info_base_y + line_height_info * 2
-                
-                wrapped_lines = self.wrap_text(desc_text, self.font_tiny, max_desc_width)
-                for i, line in enumerate(wrapped_lines):
-                    if desc_y_start + (i * (self.font_tiny.get_height() + 2)) < self.main_info_panel_rect.bottom - 5:
-                         self.draw_text(line, self.font_tiny, self.description_color, selected_info_x_start, desc_y_start + (i * (self.font_tiny.get_height() + 2)), center=False)
-                    else:
-                        break # Stop if text overflows panel
-
-        # --- 3. Ability Bar (Top of UI elements, below game map) ---
-        self.ability_buttons.clear()
-        if game_state == "player_turn" and player and current_turn_entity == player:
-            # Draw ability bar background
-            ability_bar_rect = pygame.Rect(0, self.ability_bar_y_position, screen_w, self.ability_bar_total_height)
-            ability_bar_surface = pygame.Surface(ability_bar_rect.size, pygame.SRCALPHA)
-            ability_bar_surface.fill(self.ability_bar_bg_color)
-            self.screen.blit(ability_bar_surface, ability_bar_rect.topleft)
-            pygame.draw.line(self.screen, self.border_color, ability_bar_rect.topleft, ability_bar_rect.topright, 2)
-
-            mouse_pos = pygame.mouse.get_pos()
-            ability_start_x = 20
-            button_padding = 10
-            # Center buttons vertically within the ability_bar_total_height
-            button_y_pos = self.ability_bar_y_position + (self.ability_bar_total_height - self.ability_button_height) / 2
-
+        # Draw Ability Bar
+        self.ability_buttons_rects.clear() # Clear old rects
+        if player and player.abilities:
             for i, ability in enumerate(player.abilities):
-                if ability.name == "Move": continue
-                
                 button_rect = pygame.Rect(
-                    ability_start_x + i * (self.ability_button_width + button_padding),
-                    button_y_pos,
+                    self.ability_buttons_start_x + i * (self.ability_button_width + self.ability_button_padding),
+                    self.ability_buttons_y,
                     self.ability_button_width,
                     self.ability_button_height
                 )
-                self.ability_buttons.append((button_rect, ability))
-
-                color = self.ability_button_hover_color if button_rect.collidepoint(mouse_pos) else self.ability_button_color
-                if active_ability and active_ability.name == ability.name:
-                    color = self.selected_text_color 
+                self.ability_buttons_rects.append(button_rect)                # Button color based on selection or AP
+                btn_color = COLORS.get("button_normal")
+                if active_ability and active_ability.id_name == ability.id_name:
+                    btn_color = COLORS.get("button_hover") # Highlight if active
+                elif player.current_ap < ability.ap_cost:
+                    btn_color = COLORS.get("dark_grey") # Grey out if not enough AP
                 
-                pygame.draw.rect(self.screen, color, button_rect, border_radius=5)
-                # Draw ability name and AP cost on button
-                ability_text_surface = self.font_tiny.render(f"{ability.name} ({ability.ap_cost}AP)", True, self.ability_button_text_color)
-                ability_text_rect = ability_text_surface.get_rect(center=button_rect.center)
-                self.screen.blit(ability_text_surface, ability_text_rect)
+                pygame.draw.rect(self.screen, btn_color, button_rect)
+                ability_text = f"{ability.name[:10]} ({i+1})" # Show first 10 chars + hotkey
+                self.draw_text(ability_text, self.font_small, COLORS.get("button_text"), button_rect.centerx, button_rect.centery, center=True)                # Display AP cost tooltip on hover for abilities
+                if hovered_ability_info and hovered_ability_info['ability'].id_name == ability.id_name:
+                    ap_cost_text = f"AP: {hovered_ability_info['ap_cost']}"
+                    text_surface = self.tooltip_font.render(ap_cost_text, True, COLORS.get("white"), COLORS.get("black"))
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
+                    tooltip_rect = text_surface.get_rect(midleft=(mouse_x + 10, mouse_y - 10))
+                    
+                    # Ensure tooltip stays on screen
+                    if tooltip_rect.right > self.screen.get_width(): tooltip_rect.right = self.screen.get_width() - 5
+                    if tooltip_rect.top < 0 : tooltip_rect.top = 5
 
-        # Game Over / Victory Message (drawn on top of everything else)
-        if game_state == "game_over_player_lose":
-            self.draw_text("GAME OVER", self.font_large, COLORS.get("red", (255,50,50)), screen_w // 2, screen_h // 2 - 50)
-            self.draw_text("Press ESC to return to menu", self.font_small, self.text_color, screen_w // 2, screen_h // 2 + 20)
-        elif game_state == "game_over_player_win":
-            self.draw_text("VICTORY!", self.font_large, COLORS.get("green", (50,255,50)), screen_w // 2, screen_h // 2 - 50)
-            self.draw_text("Press ESC to return to menu", self.font_small, self.text_color, screen_w // 2, screen_h // 2 + 20)
+                    pygame.draw.rect(self.screen, COLORS.get("black"), tooltip_rect.inflate(4,4))
+                    self.screen.blit(text_surface, tooltip_rect)
 
+
+        # Draw End Round Button (only if it's player's turn)
+        if game_state == "player_turn":
+            mouse_pos = pygame.mouse.get_pos()
+            button_c = self.button_hover_color if self.end_round_button_rect.collidepoint(mouse_pos) else self.button_color
+            pygame.draw.rect(self.screen, button_c, self.end_round_button_rect)
+            self.draw_text(self.end_round_button_text, self.button_font, self.button_text_color,
+                           self.end_round_button_rect.centerx, self.end_round_button_rect.centery, center=True)
+        
     def wrap_text(self, text, font, max_width):
         words = text.split(' ')
         lines = []
@@ -291,13 +250,29 @@ class GameUI(BaseInterface):
         lines.append(current_line.strip())
         return lines
 
-    def get_clicked_ability(self, click_pos) -> Ability | None:
-        """Checks if a click position collides with any ability button."""
-        for rect, ability in self.ability_buttons:
+    def get_clicked_ability(self, click_pos, player_abilities: list[Ability]) -> Ability | None:
+        if not player_abilities: return None
+        for i, rect in enumerate(self.ability_buttons_rects):
             if rect.collidepoint(click_pos):
-                return ability
+                if i < len(player_abilities):
+                    return player_abilities[i]
         return None
 
+    def get_hovered_ability(self, hover_pos, player_abilities: list[Ability]) -> Ability | None:
+        """Checks if the mouse is hovering over an ability button."""
+        if not player_abilities: return None
+        for i, rect in enumerate(self.ability_buttons_rects):
+            if rect.collidepoint(hover_pos):
+                if i < len(player_abilities):
+                    return player_abilities[i]
+        return None
+
+    def get_clicked_button(self, click_pos, game_state_is_player_turn) -> str | None:
+        if game_state_is_player_turn:
+            if self.end_round_button_rect.collidepoint(click_pos):
+                return "end_round"
+        return None
+    
     def handle_log_scroll(self, event, num_log_messages):
         max_scroll = max(0, num_log_messages - ((self.log_area_rect.height - 10) // self.log_line_height))
         if event.type == pygame.MOUSEBUTTONDOWN:

@@ -1,0 +1,12 @@
+{
+  "move": {
+    "name": "Move",
+    "ap_cost": 1,
+    "range": 1,
+    "damage_amount": 0,
+    "damage_type": null,
+    "target_type": "TILE",
+    "description": "Move to an adjacent valid tile. Cost is per tile.",
+    "effect_radius": 0
+  }
+}

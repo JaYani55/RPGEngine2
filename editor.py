@@ -1,10 +1,16 @@
 import pygame
-import json
-import os
+import os # Ensure os is imported
+import json # Ensure json is imported
 from config import SCREEN_WIDTH, SCREEN_HEIGHT, TILE_SIZE, FONT_SIZE, COLORS
-from data_manager import save_map_data, load_map_data, list_available_entities, load_entity_data, save_entity_data, DATA_DIR, MAP_DIR # Added save_entity_data
+from data_manager import (
+    save_map_data, load_map_data, 
+    list_available_entities, load_entity_data, save_entity_data, 
+    DATA_DIR, MAP_DIR, ABILITY_DIR, # Added ABILITY_DIR
+    list_available_ability_ids, # New import for ability IDs
+    load_json, save_json # For loading/saving ability category files directly
+)
 from utils import pixel_to_grid, grid_to_pixel
-from abilities import ABILITIES_REGISTRY, get_ability # Added abilities import
+from abilities import ABILITIES_REGISTRY, get_ability, TargetType # ABILITIES_REGISTRY for listing, TargetType for editor
 
 # Editor specific constants
 EDITOR_TILE_SIZE = TILE_SIZE + 4 # Slightly larger for better clicking
@@ -56,6 +62,17 @@ class Editor:
         self.editing_entity_definition_id = None # ID of the entity definition being edited
         self.selected_ability_for_toggle_idx = 0 # For UI navigation of abilities list
 
+        # Ability Definition Editor State (New)
+        self.editing_ability_category_file = None # e.g., "attacks.json"
+        self.editing_ability_id = None      # e.g., "new_spell"
+        self.ability_editor_fields = {}     # Stores current values for the ability being edited
+        self.selected_ability_field_idx = 0
+        self.ability_field_order = [ # Define order and type for editing
+            "name", "ap_cost", "range", "damage_amount", "damage_type", 
+            "target_type", "description", "effect_radius"
+        ]
+        self.target_type_enum_values = [tt.value for tt in TargetType] # For dropdown/cycle
+
         self.show_save_dialog = False
         self.save_filename_input = "my_map"
         self.show_load_dialog = False
@@ -87,9 +104,16 @@ class Editor:
         for entity_id in self.available_entity_ids:
             data = load_entity_data(entity_id)
             if data:
-                # Ensure 'abilities' key exists and is a list
                 if 'abilities' not in data or not isinstance(data['abilities'], list):
-                    data['abilities'] = [] 
+                    data['abilities'] = []
+                
+                move_ability_id = "move" 
+                if move_ability_id not in data['abilities']:
+                    # Add it if not present, assuming 'move' is a base ability for all entities
+                    # This ensures it can be seen in the editor, even if it was missing from JSON.
+                    # The game logic itself should also handle entities that might lack 'move'.
+                    data['abilities'].append(move_ability_id)
+                
                 self.available_entity_definitions[entity_id] = data
         if not self.available_entity_ids:
             self.set_message("No entity definitions found in data/entities.", 180)
@@ -107,6 +131,9 @@ class Editor:
         return int(grid_x), int(grid_y)
 
     def handle_input(self, event):
+        if self.editing_ability_id: # Prioritize ability definition editor input
+            self.handle_ability_definition_editor_input(event)
+            return
         if self.editing_entity_definition_id:
             self.handle_entity_ability_editor_input(event)
             return
@@ -172,16 +199,22 @@ class Editor:
             elif event.key == pygame.K_h: self.editing_mode = "heights"; self.set_message("Mode: Edit Heights", 60)
             elif event.key == pygame.K_e: 
                 self.editing_mode = "entities"
-                self.set_message("Mode: Place Entities. Press 'A' to edit selected entity type's abilities.", 60)
+                self.set_message("Mode: Place Entities. Press 'A' to edit entity abilities, 'D' for ability definitions.", 60)
             elif event.key == pygame.K_x: self.editing_mode = "select"; self.set_message("Mode: Erase/Select", 60)
 
-            elif event.key == pygame.K_a and self.editing_mode == "entities": # 'A' for Abilities
+            elif event.key == pygame.K_a and self.editing_mode == "entities": # 'A' for Abilities on Entity
                 if self.available_entity_ids:
                     self.editing_entity_definition_id = self.available_entity_ids[self.current_entity_id_index]
                     self.selected_ability_for_toggle_idx = 0 
-                    self.set_message(f"Editing abilities for {self.editing_entity_definition_id}. Use Up/Down, Enter to toggle, S to Save, Esc to exit.", 0) # Persistent message
+                    if not ABILITIES_REGISTRY:
+                        print("Warning: ABILITIES_REGISTRY is empty in editor. Abilities might not load correctly.")
+                    self.set_message(f"Editing Abilities for: {self.editing_entity_definition_id}. Nav:Up/Down. Toggle:Enter. Save:S. Exit:Esc.", 0)
                 else:
                     self.set_message("No entity type selected to edit abilities.", 120)
+            
+            elif event.key == pygame.K_d: # 'D' for Definitions (Ability Definitions)
+                self.open_ability_definition_selector() 
+
             elif event.key == pygame.K_LEFT:
                 if self.editing_mode == "tiles": self.current_tile_char_index = (self.current_tile_char_index - 1) % len(self.available_tile_chars)
                 elif self.editing_mode == "entities" and self.available_entity_ids: self.current_entity_id_index = (self.current_entity_id_index - 1) % len(self.available_entity_ids)
@@ -256,6 +289,244 @@ class Editor:
         # self.camera_offset_x = max(min(0, self.camera_offset_x), SCREEN_WIDTH - self.map_width * EDITOR_TILE_SIZE)
         # self.camera_offset_y = max(min(0, self.camera_offset_y), SCREEN_HEIGHT - self.map_height * EDITOR_TILE_SIZE - 100) # 100 for UI space
 
+    def handle_entity_ability_editor_input(self, event):
+        if not self.editing_entity_definition_id:
+            return
+
+        entity_def = self.available_entity_definitions.get(self.editing_entity_definition_id)
+        if not entity_def:
+            self.editing_entity_definition_id = None # Should not happen, but reset if it does
+            self.set_message("Error: Entity definition not found.", 120)
+            return
+
+        all_ability_ids = sorted(list(ABILITIES_REGISTRY.keys())) # Use IDs from the live registry
+        if not all_ability_ids: # No abilities defined in the game
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self.editing_entity_definition_id = None
+                self.set_message("Exited ability editor. No abilities available.", 120)
+            return
+
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                self.selected_ability_for_toggle_idx = (self.selected_ability_for_toggle_idx - 1) % len(all_ability_ids)
+            elif event.key == pygame.K_DOWN:
+                self.selected_ability_for_toggle_idx = (self.selected_ability_for_toggle_idx + 1) % len(all_ability_ids)
+            elif event.key == pygame.K_RETURN: # Toggle ability
+                if self.selected_ability_for_toggle_idx < len(all_ability_ids):
+                    ability_id_to_toggle = all_ability_ids[self.selected_ability_for_toggle_idx]
+                    
+                    if ability_id_to_toggle == "move":
+                        self.set_message("'move' ability cannot be removed from entity.", 120)
+                        return
+
+                    current_entity_abilities = entity_def.get("abilities", [])
+                    if ability_id_to_toggle in current_entity_abilities:
+                        current_entity_abilities.remove(ability_id_to_toggle)
+                        self.set_message(f"Removed '{ability_id_to_toggle}' from {self.editing_entity_definition_id}.", 90)
+                    else:
+                        current_entity_abilities.append(ability_id_to_toggle)
+                        # Sort for consistent order in JSON, optional
+                        # current_entity_abilities.sort() 
+                        self.set_message(f"Added '{ability_id_to_toggle}' to {self.editing_entity_definition_id}.", 90)
+                    entity_def["abilities"] = current_entity_abilities
+            elif event.key == pygame.K_s: # Save entity definition
+                save_entity_data(self.editing_entity_definition_id, entity_def)
+                self.set_message(f"Saved abilities for '{self.editing_entity_definition_id}'.", 180)
+                # Optionally exit after save, or stay to make more changes
+                # self.editing_entity_definition_id = None 
+            elif event.key == pygame.K_ESCAPE: # Exit ability editor
+                self.editing_entity_definition_id = None
+                self.set_message("Exited entity ability editor. Mode: Place Entities.", 120)
+                if self.editing_mode == "entities": # Reset main entity mode message
+                     self.set_message("Mode: Place Entities. Press 'A' to edit entity abilities, 'D' for ability definitions.", 60)
+
+    # --- ABILITY DEFINITION EDITOR --- (New Section)
+    def open_ability_definition_selector(self):
+        all_known_ids = list_available_ability_ids() 
+        if not all_known_ids:
+            self.set_message("No abilities in JSONs. Creating new 'new_abilities.json' with 'new_sample_ability'.", 120)
+            self.editing_ability_category_file = "new_abilities.json" 
+            self.editing_ability_id = "new_sample_ability" 
+            self.load_ability_for_definition_editor(self.editing_ability_category_file, self.editing_ability_id, is_new=True)
+            return
+
+        first_id_to_edit = all_known_ids[0]
+        source_file = self.find_ability_source_file(first_id_to_edit)
+        if source_file:
+            self.editing_ability_category_file = source_file
+            self.editing_ability_id = first_id_to_edit
+            self.load_ability_for_definition_editor(self.editing_ability_category_file, self.editing_ability_id)
+        else:
+            self.set_message(f"Src for {first_id_to_edit} not found. Opening new in 'custom_abilities.json'.", 120)
+            self.editing_ability_category_file = "custom_abilities.json"
+            self.editing_ability_id = "my_new_ability"
+            self.load_ability_for_definition_editor(self.editing_ability_category_file, self.editing_ability_id, is_new=True)
+
+    def find_ability_source_file(self, ability_id_to_find: str) -> str | None:
+        if not os.path.exists(ABILITY_DIR):
+            return None
+        for filename in os.listdir(ABILITY_DIR):
+            if filename.endswith(".json"):
+                filepath = os.path.join(ABILITY_DIR, filename)
+                category_data = load_json(filepath) 
+                if category_data and isinstance(category_data, dict) and ability_id_to_find in category_data:
+                    return filename
+        return None 
+
+    def load_ability_for_definition_editor(self, category_file: str, ability_id: str, is_new=False):
+        self.editing_ability_category_file = category_file
+        self.editing_ability_id = ability_id
+        self.ability_editor_fields = {}
+        self.selected_ability_field_idx = 0
+
+        if is_new:
+            self.ability_editor_fields["name"] = ability_id.replace("_", " ").title()
+            self.ability_editor_fields["ap_cost"] = "1"
+            self.ability_editor_fields["range"] = "1"
+            self.ability_editor_fields["damage_amount"] = "0"
+            self.ability_editor_fields["damage_type"] = "physical"
+            self.ability_editor_fields["target_type"] = TargetType.ENEMY.value 
+            self.ability_editor_fields["description"] = "A new ability."
+            self.ability_editor_fields["effect_radius"] = "0"
+            self.set_message(f"Creating new ability '{ability_id}' in {category_file}. Edit & Save (Ctrl+S).", 0)
+        else:
+            filepath = os.path.join(ABILITY_DIR, category_file)
+            all_abilities_in_file = load_json(filepath)
+            if all_abilities_in_file and ability_id in all_abilities_in_file:
+                data = all_abilities_in_file[ability_id]
+                self.ability_editor_fields["name"] = data.get("name", ability_id.replace("_"," ").title())
+                self.ability_editor_fields["ap_cost"] = str(data.get("ap_cost", 0))
+                self.ability_editor_fields["range"] = str(data.get("range", 0))
+                self.ability_editor_fields["damage_amount"] = str(data.get("damage_amount", 0))
+                self.ability_editor_fields["damage_type"] = data.get("damage_type", "physical") or "" 
+                self.ability_editor_fields["target_type"] = data.get("target_type", TargetType.ENEMY.value)
+                self.ability_editor_fields["description"] = data.get("description", "")
+                self.ability_editor_fields["effect_radius"] = str(data.get("effect_radius", 0))
+                self.set_message(f"Editing ability '{ability_id}' from {category_file}. Edit & Save (Ctrl+S).", 0)
+            else:
+                self.set_message(f"Error: Could not load '{ability_id}' from {category_file}. Creating as new.", 120)
+                self.load_ability_for_definition_editor(category_file, ability_id, is_new=True)
+
+    def handle_ability_definition_editor_input(self, event):
+        if not self.editing_ability_id or not self.editing_ability_category_file:
+            return
+
+        current_field_key = self.ability_field_order[self.selected_ability_field_idx]
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.editing_ability_id = None
+                self.editing_ability_category_file = None
+                self.set_message("Exited ability definition editor. Mode: Place Entities.", 120)
+                if self.editing_mode == "entities": 
+                     self.set_message("Mode: Place Entities. Press 'A' for entity abilities, 'D' for definitions.", 60)
+                return
+
+            if event.key == pygame.K_s and pygame.key.get_mods() & pygame.KMOD_CTRL: 
+                self.save_current_ability_definition()
+                return
+            
+            if event.key == pygame.K_UP:
+                self.selected_ability_field_idx = (self.selected_ability_field_idx - 1) % len(self.ability_field_order)
+            elif event.key == pygame.K_DOWN:
+                self.selected_ability_field_idx = (self.selected_ability_field_idx + 1) % len(self.ability_field_order)
+            elif event.key == pygame.K_RETURN or event.key == pygame.K_TAB: 
+                self.selected_ability_field_idx = (self.selected_ability_field_idx + 1) % len(self.ability_field_order)
+            
+            current_value_str = str(self.ability_editor_fields.get(current_field_key, ""))
+
+            if current_field_key == "target_type":
+                current_idx = self.target_type_enum_values.index(current_value_str) if current_value_str in self.target_type_enum_values else 0
+                if event.key == pygame.K_LEFT:
+                    new_idx = (current_idx - 1) % len(self.target_type_enum_values)
+                    self.ability_editor_fields[current_field_key] = self.target_type_enum_values[new_idx]
+                elif event.key == pygame.K_RIGHT:
+                    new_idx = (current_idx + 1) % len(self.target_type_enum_values)
+                    self.ability_editor_fields[current_field_key] = self.target_type_enum_values[new_idx]
+            elif current_field_key in ["ap_cost", "range", "damage_amount", "effect_radius"]:
+                if event.key == pygame.K_BACKSPACE:
+                    self.ability_editor_fields[current_field_key] = current_value_str[:-1]
+                elif event.unicode.isdigit():
+                    self.ability_editor_fields[current_field_key] = current_value_str + event.unicode
+            else: 
+                if event.key == pygame.K_BACKSPACE:
+                    self.ability_editor_fields[current_field_key] = current_value_str[:-1]
+                elif event.unicode.isprintable(): 
+                    self.ability_editor_fields[current_field_key] = current_value_str + event.unicode
+    
+    def save_current_ability_definition(self):
+        if not self.editing_ability_id or not self.editing_ability_category_file:
+            self.set_message("Error: No ability selected for saving.", 120)
+            return
+
+        filepath = os.path.join(ABILITY_DIR, self.editing_ability_category_file)
+        all_data_in_file = load_json(filepath) or {}
+        
+        ability_data_to_save = {}
+        try:
+            ability_data_to_save["name"] = self.ability_editor_fields.get("name", self.editing_ability_id.replace("_"," ").title())
+            ability_data_to_save["ap_cost"] = int(self.ability_editor_fields.get("ap_cost", "0"))
+            ability_data_to_save["range"] = int(self.ability_editor_fields.get("range", "0"))
+            ability_data_to_save["damage_amount"] = int(self.ability_editor_fields.get("damage_amount", "0"))
+            dt = self.ability_editor_fields.get("damage_type", "")
+            ability_data_to_save["damage_type"] = dt if dt else None 
+            ability_data_to_save["target_type"] = self.ability_editor_fields.get("target_type", TargetType.ENEMY.value)
+            ability_data_to_save["description"] = self.ability_editor_fields.get("description", "")
+            ability_data_to_save["effect_radius"] = int(self.ability_editor_fields.get("effect_radius", "0"))
+        except ValueError as e:
+            self.set_message(f"Error: Invalid data type for a field - {e}. Save aborted.", 180)
+            return
+        except Exception as e:
+            self.set_message(f"Error preparing data for save - {e}. Save aborted.", 180)
+            return
+
+        all_data_in_file[self.editing_ability_id] = ability_data_to_save
+        
+        save_json(all_data_in_file, filepath) 
+        
+        from abilities import load_abilities as reload_game_abilities
+        reload_game_abilities()
+        self.set_message(f"'{self.editing_ability_id}' saved to {self.editing_ability_category_file} & reloaded.", 180)
+
+    def draw_ability_definition_editor(self):
+        if not self.editing_ability_id or not self.editing_ability_category_file:
+            return
+
+        panel_x, panel_y, panel_w, panel_h = 50, 50, SCREEN_WIDTH - 100, SCREEN_HEIGHT - 100
+        pygame.draw.rect(self.screen, COLORS.get("ui_background_darker", (20,20,25)), (panel_x, panel_y, panel_w, panel_h))
+        pygame.draw.rect(self.screen, COLORS.get("white"), (panel_x, panel_y, panel_w, panel_h), 2)
+
+        title = f"Edit Ability: '{self.editing_ability_id}' (in {self.editing_ability_category_file})"
+        self.draw_text(title, (panel_x + 20, panel_y + 20), self.font, TEXT_COLOR)
+
+        current_y = panel_y + 60
+        help_text = "Up/Down: Field | Enter/Tab: Next | Edit | Ctrl+S: Save | Esc: Exit"
+        self.draw_text(help_text, (panel_x + 20, current_y), self.font_small, COLORS.get("light_grey"))
+        current_y += 30
+
+        for idx, field_key in enumerate(self.ability_field_order):
+            display_name = field_key.replace("_", " ").title() + ":"
+            value_str = str(self.ability_editor_fields.get(field_key, ""))
+            
+            color = COLORS.get("yellow") if idx == self.selected_ability_field_idx else TEXT_COLOR
+            self.draw_text(display_name, (panel_x + 30, current_y), self.font, color)
+            
+            field_edit_rect = pygame.Rect(panel_x + 200, current_y - 5, panel_w - 250, self.font.get_height() + 2)
+            if idx == self.selected_ability_field_idx:
+                pygame.draw.rect(self.screen, COLORS.get("dark_grey"), field_edit_rect)
+            
+            if field_key == "target_type":
+                value_str = f"< {value_str} >"
+
+            self.draw_text(value_str, (panel_x + 205, current_y), self.font, TEXT_COLOR, center=False)
+            current_y += self.font.get_linesize() + 5
+        
+        if self.message: 
+            self.draw_text(self.message, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 25), self.font_small, COLORS.get("yellow"), center=True)
+
+    # --- END ABILITY DEFINITION EDITOR ---
+
     def draw_text(self, text, position, font, color=TEXT_COLOR, center=False):
         surface = font.render(text, True, color)
         rect = surface.get_rect()
@@ -292,7 +563,11 @@ class Editor:
     def draw(self):
         self.screen.fill(COLORS.get("dark_grey", (30,30,30))) 
 
-        if self.editing_entity_definition_id:
+        if self.editing_ability_id: 
+            self.draw_ability_definition_editor()
+            pygame.display.flip()
+            return
+        elif self.editing_entity_definition_id: 
             self.draw_entity_ability_editor()
             # Draw Message (ensure it's visible over the editor)
             if self.message:
@@ -439,32 +714,52 @@ class Editor:
         col1_x = editor_panel_x + 30
         # col2_x = editor_panel_x + editor_panel_width // 2 # For descriptions if needed
 
-        for idx, ability_name in enumerate(all_ability_names):
-            if current_y > editor_panel_y + editor_panel_height - 40: # Stop if too many abilities
+        if not all_ability_names:
+            self.draw_text("No abilities defined in ABILITIES_REGISTRY.", (col1_x, current_y), self.font, color=COLORS.get("red", (255,0,0)))
+            current_y += self.font.get_linesize() + 2
+            if self.message: 
+                self.draw_text(self.message, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 20), self.font_small, color=COLORS.get("yellow", (255,255,0)), center=True)
+            return
+
+
+        for idx, ability_id_name in enumerate(all_ability_names): 
+            if current_y > editor_panel_y + editor_panel_height - 40: 
                 self.draw_text("...", (col1_x, current_y), self.font, color=TEXT_COLOR)
                 break
 
             prefix = "> " if idx == self.selected_ability_for_toggle_idx else "  "
             color = COLORS.get("yellow", (255,255,0)) if idx == self.selected_ability_for_toggle_idx else TEXT_COLOR
             
-            status_char = "[X]" if ability_name in entity_current_abilities else "[ ]"
-            if ability_name == "Move" and "Move" not in entity_current_abilities: # Should always be there
-                 status_char = "[X]" # Visually enforce it, logic should handle actual presence
-            elif ability_name == "Move": # If it is "Move", make it non-toggleable visually too
-                status_char = "[X]"
+            # "move" ability is now guaranteed to be in entity_current_abilities by load_entity_definitions
+            # and input handler prevents its removal.
+            status_char = "[X]" if ability_id_name in entity_current_abilities else "[ ]"
+            
+            # If it's "move", ensure it's always displayed as [X] and non-interactive color if needed,
+            # though input handler is the primary guard.
+            if ability_id_name == "move":
+                status_char = "[X]" 
+            elif ability_id_name not in ABILITIES_REGISTRY: 
+                status_char = "[?]" 
+                color = COLORS.get("red", (255,0,0))
 
 
-            ability_display_name = f"{prefix}{status_char} {ability_name}"
+            ability_display_name = f"{prefix}{status_char} {ability_id_name}"
             self.draw_text(ability_display_name, (col1_x, current_y), self.font, color=color)
             
-            ability_obj = get_ability(ability_name)
+            ability_obj = get_ability(ability_id_name)
             if ability_obj:
-                desc_text = f"AP:{ability_obj.ap_cost}, Rng:{ability_obj.range}, Dmg:{ability_obj.damage_amount}"
-                if ability_name == "Move":
-                    desc_text = f"AP:{ability_obj.ap_cost} per tile"
+                desc_text = f"AP:{ability_obj.ap_cost}, Rng:{ability_obj.range}, Dmg:{ability_obj.damage_amount}, Type:{ability_obj.damage_type or 'N/A'}, Target:{ability_obj.target_type.value}"
+                if ability_id_name == "move": 
+                    desc_text = f"AP:{ability_obj.ap_cost} per tile, Rng:{ability_obj.range}, Target:{ability_obj.target_type.value}"
                 self.draw_text(desc_text, (col1_x + 250, current_y), self.font_small, color=COLORS.get("light_grey", (180,180,180)))
+            else: 
+                self.draw_text("Error: Ability data not found in registry!", (col1_x + 250, current_y), self.font_small, color=COLORS.get("red", (255,0,0)))
 
             current_y += self.font.get_linesize() + 2
+        
+        # Draw Message (ensure it's visible over the editor)
+        if self.message: # This message is from set_message, typically for the ability editor itself
+            self.draw_text(self.message, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 20), self.font_small, color=COLORS.get("yellow", (255,255,0)), center=True)
 
 
 # Example of running the editor standalone for testing (optional)
