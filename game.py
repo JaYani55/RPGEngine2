@@ -1,4 +1,5 @@
-import pygame # Ensure pygame is imported
+import pygame 
+import asyncio # Add asyncio import
 from renderer import Renderer
 from engine import GameEngine, GameMap, Entity 
 from ui import GameUI
@@ -246,7 +247,7 @@ class Game:
                         return
 
 
-    def update(self):
+    async def update(self): # <--- CHANGED to async def
         if not self._initialized or not self.is_running:
             return
 
@@ -259,44 +260,32 @@ class Game:
         self.game_messages = new_messages
 
         if self.engine:
-            # Check for game over condition from engine
             if self.engine.game_state in ["game_over_player_win", "game_over_player_lose"]:
                 self.game_state = self.engine.game_state
-                # Potentially set a flag to show a game over screen/message persistently
-                # self.is_running = False # Or handle via a game over screen in main loop
 
-            if self.game_state != "player_turn" and self.engine.game_state == self.game_state: # Ensure it's still NPC turn
+            if self.game_state != "player_turn" and self.engine.game_state == self.game_state: 
                 current_npc = self.engine.get_current_turn_entity()
-                print(f"GAME_DEBUG: Update loop - NPC turn. Current NPC: {current_npc.name if current_npc else 'None'}. Game state: {self.game_state}") # DEBUG
+                print(f"GAME_DEBUG: Update loop - NPC turn. Current NPC: {current_npc.name if current_npc else 'None'}. Game state: {self.game_state}") 
                 if current_npc and not current_npc.is_dead:
-                    # For sequential actions, this would be more complex.
-                    # For now, run_npc_turn handles the full turn.
-                    print(f"GAME_DEBUG: Calling engine.run_npc_turn for {current_npc.name}") # DEBUG
-                    self.engine.run_npc_turn(current_npc) # Changed from run_npc_behavior
-                    # The message handling might need adjustment if run_npc_turn doesn't return one,
-                    # or if messages are logged directly by the engine/AI.
-                    # For now, assuming direct logging is sufficient.
+                    print(f"GAME_DEBUG: Calling engine.run_npc_turn for {current_npc.name}") 
+                    await self.engine.run_npc_turn(current_npc) # <--- CHANGED to await
                     
-                    # run_npc_turn should call next_turn internally if it finishes its actions or runs out of AP.
-                    # So, we just need to sync the game_state.
                     self.game_state = self.engine.game_state 
 
                     if self.game_state == "player_turn" and self.player:
-                         self.selected_entity = self.player # Reselect player
+                         self.selected_entity = self.player 
                          self.action_mode = "select"
                          if self.engine:
                             reachable_tiles_data = self.engine.get_reachable_tiles_with_ap_cost(self.player)
-                            self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data] # Corrected line
+                            self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data] 
             
-            # If engine state changed to player turn (e.g. after NPC turn), ensure UI reflects this
             elif self.game_state == "player_turn" and self.engine.game_state == "player_turn":
-                if self.selected_entity != self.player : # e.g. if player was deselected
+                if self.selected_entity != self.player : 
                     self.selected_entity = self.player
                     self.action_mode = "select"
                     if self.engine:
                         reachable_tiles_data = self.engine.get_reachable_tiles_with_ap_cost(self.player)
-                        self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data] # Corrected line
-
+                        self.highlighted_tiles_move = [tile_data[0] for tile_data in reachable_tiles_data] 
 
         if self.game_state in ["game_over_player_win", "game_over_player_lose"] and self.is_running:
             # Game over logic handled by main loop checking is_over()

@@ -6,6 +6,7 @@ from data_manager import load_entity_data, list_available_ability_ids
 from abilities import get_ability, Ability, TargetType
 from ai import Behavior, create_behavior  # Import AI behavior system
 import collections
+import asyncio # Add asyncio import
 
 class GameMap:
     def __init__(self, tiles, heightmap):
@@ -463,7 +464,7 @@ class GameEngine:
         self.check_game_over_conditions()
         return success, message
 
-    def run_npc_turn(self, npc: Entity):
+    async def run_npc_turn(self, npc: Entity):
         """
         Execute an NPC's turn using their behavior strategy.
         This replaces the old run_npc_behavior method.
@@ -500,6 +501,8 @@ class GameEngine:
                     break
                     
                 actions_taken += 1
+                # Add a small delay for pacing NPC actions if desired
+                await asyncio.sleep(0.05) # Example: 50ms delay between NPC actions
             else:
                 # Behavior decided to do nothing
                 self.add_log_message(f"{npc.name} chooses to wait.")
@@ -509,9 +512,14 @@ class GameEngine:
             if self.player and self.player.is_dead:
                 self.check_game_over_conditions()
                 return
+            
+            # Yield control briefly if many actions are possible in a single turn
+            if actions_taken % 3 == 0: # Example: yield every 3 actions
+                 await asyncio.sleep(0)
+
 
         self.add_log_message(f"--- {npc.name}'s turn ends ---")
-        self.next_turn()
+        self.next_turn() # next_turn itself is synchronous
 
     def find_path(self, start_x: int, start_y: int, end_x: int, end_y: int) -> list[tuple[int, int]] | None:
         """

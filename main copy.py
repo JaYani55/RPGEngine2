@@ -1,14 +1,13 @@
 import pygame
 import sys
 import os
-import asyncio  # <--- Add this import
 from config import SCREEN_WIDTH, SCREEN_HEIGHT, FPS
 from game import Game
 # Conditional import for Editor
 # from editor import Editor # Moved down
 from ui import MainMenu, MapSelectionScreen
 
-async def main():  # <--- Keep this as async def
+def main():
     print("WASM: main() called")
     try:
         pygame.init()
@@ -75,20 +74,17 @@ async def main():  # <--- Keep this as async def
                 if event.key == pygame.K_ESCAPE:
                     print("WASM: ESCAPE key pressed.")
                     if WASM_DIRECT_MAP_NAME:
-                        pass # In direct map mode, ESC does nothing for now
+                        pass
                     elif current_state == "game" or current_state == "editor":
                         current_state = "main_menu"
                         pygame.display.set_caption("ASCII RPG - Main Menu")
-                        # Reset game/editor state if necessary when returning to menu
-                        if game: game.reset() # Assuming game has a reset method
-                        # if editor: editor.reset() # if editor has a reset method
 
         try:
-            screen.fill((0, 0, 0)) # Black background
+            screen.fill((0, 0, 0))
 
             if current_state == "main_menu" and main_menu:
                 main_menu.draw()
-                for event_m in events: 
+                for event_m in events: # Use a different var name
                     new_state_info = main_menu.handle_input(event_m)
                     if isinstance(new_state_info, tuple):
                         new_state, data = new_state_info
@@ -102,14 +98,14 @@ async def main():  # <--- Keep this as async def
                             pygame.display.set_caption("ASCII RPG - Select Map")
                         elif current_state == "game":
                             pygame.display.set_caption("ASCII RPG - Game")
-                        elif current_state == "editor" and editor:
+                        elif current_state == "editor" and editor: # editor will be None in WASM mode
                             if editor: editor.load_entity_definitions() 
                             pygame.display.set_caption("ASCII RPG - Editor")
                         break 
             
             elif current_state == "map_selection" and map_selection_screen:
                 map_selection_screen.draw()
-                for event_s in events: 
+                for event_s in events: # Use a different var name
                     new_state_info = map_selection_screen.handle_input(event_s)
                     if isinstance(new_state_info, tuple):
                         new_state, data = new_state_info
@@ -121,8 +117,8 @@ async def main():  # <--- Keep this as async def
                         if current_state == "game":
                             if data and game: 
                                 selected_map_for_game = data
-                                game.reset() # Assuming game has a reset method
-                                game.game_state = "loading" # Set state for loading screen
+                                game.reset()
+                                game.game_state = "loading"
                                 pygame.display.set_caption(f"ASCII RPG - Loading ({selected_map_for_game})...")
                             else: 
                                 current_state = "main_menu" 
@@ -136,7 +132,6 @@ async def main():  # <--- Keep this as async def
                    game.game_state not in ["critical_error_no_player", "critical_error", "load_error"]:
                     print(f"WASM: Attempting to load game state for map: {selected_map_for_game}")
                     try:
-                        # Assuming game.load_game_state is synchronous for now
                         game.load_game_state(selected_map_for_game)
                         print(f"WASM: game.load_game_state called. Game initialized: {game.is_initialized()}, Game state: {game.game_state}")
                     except Exception as e:
@@ -144,31 +139,27 @@ async def main():  # <--- Keep this as async def
                         if game: game.game_state = "load_error" 
                 
                 if game.is_initialized():
-                    for event_g in events: # Pass all events to game's input handler
+                    for event_g in events:
                         game.handle_input(event_g)
-                    
-                    await game.update() # If game.update() is async
-                    
+                    game.update()
                     game.draw()
                     if game.is_over(): 
                         if WASM_DIRECT_MAP_NAME:
-                            pass # In direct map mode, game over might just stop or show a message
+                            pass
                         else:
                             current_state = "main_menu"
                             selected_map_for_game = None 
-                            if game: game.reset() # Assuming game has a reset method
+                            if game: game.reset() 
                             pygame.display.set_caption("ASCII RPG - Main Menu")
                 elif game.game_state in ["critical_error_no_player", "critical_error", "load_error"]:
                     print(f"WASM: Game in error state: {game.game_state}. Cannot proceed with game logic.")
-                    if game: game.draw() # Ensure error message is drawn
                 else:
-                    # Game is loading or in another non-active state
-                    if game: game.draw() # Draw loading screen or current state
+                    pass
 
-            elif current_state == "editor" and editor: 
-                for event_e in events: 
+            elif current_state == "editor" and editor: # This block will not be entered in WASM direct play
+                for event_e in events: # Use a different var name
                     editor.handle_input(event_e)
-                editor.update() # Assuming editor.update is synchronous
+                editor.update()
                 editor.draw()
                 if editor.is_done(): 
                     current_state = "main_menu"
@@ -176,26 +167,18 @@ async def main():  # <--- Keep this as async def
 
             pygame.display.flip()
         except Exception as e:
-            print(f"WASM: ERROR in main loop: {e}")
-            # import traceback # Consider for more detailed debugging if needed
+            print(f"WASM: ERROR in main loop drawing/flipping: {e}")
+            # import traceback
             # traceback.print_exc()
-            running = False # Or handle more gracefully
+            running = False
 
         clock.tick(FPS)
-        await asyncio.sleep(0) # <--- Crucial for Pygbag: yields control to browser
 
     print("WASM: Exiting main loop.")
     pygame.quit()
     print("WASM: pygame.quit() called.")
+    # sys.exit() # Generally not needed/problematic in WASM
 
 if __name__ == "__main__":
     print("WASM: __main__ block reached.")
-    # When running directly, use asyncio.run() to execute the async main function
-    try:
-        asyncio.run(main()) # <--- MODIFIED
-    except KeyboardInterrupt:
-        print("WASM: Program interrupted by user (Ctrl+C)")
-    except Exception as e:
-        print(f"WASM: An unexpected error occurred in __main__: {e}")
-        # import traceback
-        # traceback.print_exc()
+    main()

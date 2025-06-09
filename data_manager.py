@@ -1,7 +1,8 @@
 import json
 import os
 
-DATA_DIR = "data"
+# DATA_DIR = "../data" # If you had this for the 'assets' structure
+DATA_DIR = "data" # Should now work directly
 MAP_DIR = os.path.join(DATA_DIR, "maps")
 ENTITY_DIR = os.path.join(DATA_DIR, "entities")
 ABILITY_DIR = os.path.join(DATA_DIR, "abilities") # Keep for listing or other purposes

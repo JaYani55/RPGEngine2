@@ -1,0 +1,247 @@
+<html lang="en-us"><script src="{{cookiecutter.cdn}}pythons.js" type=module id=site data-LINES={{cookiecutter.LINES}} data-CONSOLE={{cookiecutter.CONSOLE}} data-python=python{{cookiecutter.PYBUILD}} data-os=vtx,fs,snd,gui async defer>#<!--
+
+# print("""  // COMMENT OUT THIS ENTIRE MULTI-LINE PRINT BLOCK
+# Loading {{cookiecutter.title}} from {{cookiecutter.archive}}.apk
+#     Pygbag Version : {{cookiecutter.version}}
+#     Template Version : 0.9.0
+#     Python  : {{cookiecutter.PYBUILD}}
+#     CDN URL : {{cookiecutter.cdn}}
+#     Screen  : {{cookiecutter.width}}x{{cookiecutter.height}}
+#     Title   : {{cookiecutter.title}}
+#     Folder  : {{cookiecutter.directory}}
+#     Authors : {{cookiecutter.authors}}
+#     SPDX-License-Identifier: {{cookiecutter.spdx}}
+# """)
+
+
+# # screen pixels (real, hardware) // COMMENT OUT THESE DEFINITIONS
+# WIDTH=1024  # {{cookiecutter.width}}
+# HEIGHT=600  # {{cookiecutter.height}}
+
+# # reference/idealized screen pixels
+# REFX = 1980
+# REFY = 1080
+
+# def u(real, ref, v):
+#     if abs(v)<0.9999999:
+#         result = int( (float(real)/100.0) * (v*1000))
+#         if v<0:
+#             return real-result
+#         return result
+#     return int( (real/ref) * v )
+
+# def ux(*argv):
+#     global WIDTH, REFX
+#     acc = 0
+#     for v in argv:
+#         acc += u(WIDTH, REFX, v)
+#     return acc
+
+# def uy(*argv):
+#     global HEIGHT, REFY
+#     acc = 0
+#     for v in argv:
+#         acc += u(HEIGHT, REFY, v)
+#     return acc
+
+
+# do not rename
+async def custom_site():
+
+    import sys 
+    import os  
+    import asyncio
+    import platform # Make sure platform is imported here if ux/uy are commented out
+    import json
+    from pathlib import Path
+    import embed
+
+    # If ux/uy were used by pygame.display.set_mode, you'll need to provide fixed values for now
+    # For example:
+    fixed_width = 800 # Temporary fixed width
+    fixed_height = 600 # Temporary fixed height
+
+
+    platform.window.console.log("TEMPLATE PYTHON: custom_site() started.") 
+
+    platform.document.body.style.background = "#7f7f7f"
+
+    import pygame
+
+    def compose():
+        pygame.display.update()
+        # window.chromakey(None, *screen.get_colorkey(), 40) # window might not be defined if ux/uy are gone
+        # For now, let's simplify compose if window is an issue
+        pass
+
+
+    pygame.init()
+    pygame.font.init()
+    platform.window.console.log("TEMPLATE PYTHON: Pygame initialized for loading screen.") 
+
+    # Use fixed_width and fixed_height if ux/uy are commented out
+    screen = pygame.display.set_mode([fixed_width, fixed_height], pygame.SRCALPHA, 32)
+    screen.set_colorkey( (0,0,0,0), pygame.RLEACCEL )
+    screen.fill( (0,0,0,0) )
+    # compose() # compose might need adjustment
+
+    platform.window.transfer.hidden = True 
+    platform.window.canvas.style.visibility = "visible"
+
+    apk = "{{cookiecutter.archive}}.apk"
+    bundle = "{{cookiecutter.archive}}"
+    appdir = Path(f"/data/data/{bundle}") 
+    platform.window.console.log(f"TEMPLATE PYTHON: appdir (APK mount point) is {appdir}")
+    
+    # === MODIFIED: Ensure the FULL VFS mount point directory exists ===
+    try:
+        platform.window.console.log(f"TEMPLATE PYTHON: Ensuring VFS directory {appdir} exists for mount.")
+        # Python's os.makedirs equivalent for Path objects:
+        # parents=True creates parent dirs (/data, /data/data) if they don't exist.
+        # exist_ok=True means it won't raise an error if appdir itself already exists.
+        appdir.mkdir(parents=True, exist_ok=True) 
+        platform.window.console.log(f"TEMPLATE PYTHON: VFS directory {appdir} ensured.")
+    except Exception as e_mkdir:
+        platform.window.console.log(f"TEMPLATE PYTHON: ERROR creating VFS directory {appdir}: {e_mkdir}")
+    # =====================================================================
+
+    code_root = appdir / "assets"
+    platform.window.console.log(f"TEMPLATE PYTHON: Calculated code_root for Python is {code_root}")
+
+    cfg = {
+        "io": "url",
+        "type":"mount",
+        "mount" : { "point" : appdir.as_posix(), "path" : "/", }, # Mount APK root at appdir
+        "path" : f"/ => {appdir.as_posix()}",
+    }
+    track = platform.window.MM.prepare(apk, json.dumps(cfg))
+    platform.window.console.log("TEMPLATE PYTHON: APK mount prepared (track initiated).") # Added more clarity
+
+    # marginx = ux(.020) # Comment out if ux is commented out
+    # marginy = uy(.045) # Comment out if uy is commented out
+    # Use fixed margins for now
+    fixed_marginx = 20
+    fixed_marginy = 20
+
+
+    def pg_bar(pos):
+        # nonlocal marginx, marginy # Comment out if marginx/uy are commented out
+        nonlocal fixed_marginx, fixed_marginy # Use fixed margins
+        total = track.len or 10
+        # slot = ux(.060)/ total # Comment out if ux is commented out
+        slot = (fixed_width * 0.06) / total # Example fixed slot calculation
+        # pygame.draw.rect(screen,(10,10,10),( marginx-ux(10), marginy-uy(10), (total*slot)+ux(20), uy(110) ) )
+        # pygame.draw.rect(screen,(0,255,0), ( marginx, marginy, track.pos*slot, uy(90)) )
+        # Simplified pg_bar if ux/uy are problematic
+        pygame.draw.rect(screen,(10,10,10),( fixed_marginx-10, fixed_marginy-10, (total*slot)+20, 110 ) )
+        pygame.draw.rect(screen,(0,255,0), ( fixed_marginx, fixed_marginy, track.pos*slot, 90) )
+
+
+    while not track.ready:
+        pg_bar(track.pos)
+        # compose() # compose might need adjustment
+        pygame.display.update() # Direct update
+        await asyncio.sleep(.1)
+    
+    pg_bar(track.len)
+    # compose() # compose might need adjustment
+    pygame.display.update() # Direct update
+    platform.window.console.log("TEMPLATE PYTHON: APK Mount and progress bar complete (track.ready is True).") # Added more clarity
+
+    # === MODIFIED: Use code_root for loaderhome ===
+    platform.window.console.log(f"TEMPLATE PYTHON: Calling platform.run_main with loaderhome='{code_root}', loadermain=None")
+    platform.run_main(PyConfig, loaderhome=code_root, loadermain=None) 
+    # ===============================================
+
+    platform.window.console.log("TEMPLATE PYTHON: platform.run_main finished.")
+    platform.window.console.log(f"TEMPLATE PYTHON: After run_main, sys.path: {sys.path}") # Check this output
+    platform.window.console.log(f"TEMPLATE PYTHON: After run_main, os.getcwd(): {os.getcwd()}") # This should now be /data/data/temp_wasm_build_src/assets
+
+    platform.window.console.log("TEMPLATE PYTHON: Entering embed.counter() loop.") 
+    embed_loop_count = 0
+    while embed.counter() < 0:
+        if embed_loop_count % 50 == 0: 
+             platform.window.console.log(f"TEMPLATE PYTHON: embed.counter() is {embed.counter()} (loop {embed_loop_count})")
+        await asyncio.sleep(.1)
+        embed_loop_count += 1
+        if embed_loop_count > 300: 
+            platform.window.console.log("TEMPLATE PYTHON: embed.counter() loop TIMEOUT.") 
+            break
+    platform.window.console.log(f"TEMPLATE PYTHON: Exited embed.counter() loop. embed.counter() is {embed.counter()}")
+
+    # === BEGIN NEW MINIMAL FILE SYSTEM CHECKS ===
+    platform.window.console.log(f"TEMPLATE PYTHON: --- Minimal Filesystem Check from CWD: {os.getcwd()} ---")
+    try:
+        # Check 1: List current directory contents
+        files_in_cwd = os.listdir(".") 
+        platform.window.console.log(f"TEMPLATE PYTHON: os.listdir('.'): {files_in_cwd}") # Should now list main.py, game.py, data/, etc.
+        
+        # Check 2: Does 'main.py' exist using a relative path?
+        main_py_exists_relative = os.path.exists("main.py")
+        platform.window.console.log(f"TEMPLATE PYTHON: os.path.exists('main.py'): {main_py_exists_relative}") # Should be True
+
+        # Check 3: Is it a file? (Only if it exists)
+        if main_py_exists_relative:
+            main_py_is_file_relative = os.path.isfile("main.py")
+            platform.window.console.log(f"TEMPLATE PYTHON: os.path.isfile('main.py'): {main_py_is_file_relative}") # Should be True
+        else:
+            platform.window.console.log(f"TEMPLATE PYTHON: os.path.isfile('main.py') skipped as file does not exist.")
+
+    except Exception as e_fs_check:
+        platform.window.console.log(f"TEMPLATE PYTHON: ERROR during filesystem check: {e_fs_check}")
+    platform.window.console.log(f"TEMPLATE PYTHON: --- End Minimal Filesystem Check ---")
+    # =======================================================
+
+    # The TopLevel_async_handler call is usually here. If it was commented out, ensure it is,
+    # or if it's needed, ensure it's correctly placed and working.
+    # For now, let's keep it as it was when you got the current successful log.
+    # Example:
+    # platform.window.console.log("TEMPLATE PYTHON: Calling TopLevel_async_handler.start_toplevel")
+    # await TopLevel_async_handler.start_toplevel(platform.shell, console=window.python.config.debug)
+    # platform.window.console.log("TEMPLATE PYTHON: TopLevel_async_handler.start_toplevel finished.")
+
+    # Define ui_callback before it's used by shell.runpy
+    def ui_callback(pkg, error=None):
+        # nonlocal fnt # fnt might not be defined if sysfont fails or ux/uy are out
+        platform.window.console.log(f"TEMPLATE PYTHON: ui_callback called for {pkg}, error: {error}")
+        # Simplified ui_callback if fnt is an issue
+        # if error:
+        #     prompt = fnt.render(f"{error}", True, "black")
+        # else:
+        #     prompt = fnt.render(f"Setting [{pkg}] up", True, "black")
+        # pg_bar(track.len)
+        # screen.blit(prompt, ( marginx+ ux(80), marginy - uy(10) ) )
+        # compose()
+        pygame.display.update()
+
+
+    platform.window.console.log(f"TEMPLATE PYTHON: About to call shell.runpy with relative path 'main.py' from CWD: {os.getcwd()}")
+    try:
+        await shell.runpy("main.py", callback=ui_callback) 
+        platform.window.console.log("TEMPLATE PYTHON: shell.runpy call completed (may have started async task).")
+        # If successful, your main.py's "WASM: TEST..." prints should appear now!
+    except Exception as e:
+        platform.window.console.log(f"TEMPLATE PYTHON: ERROR during shell.runpy: {e}")
+    # =================================================================
+
+    # ... (rest of custom_site function, UME handling, etc.) ...
+    # platform.window.console.log("TEMPLATE PYTHON: custom_site() finished.")
+
+
+import asyncio # Ensure asyncio is imported at global scope for asyncio.run
+try:
+    platform.window.console.log("TEMPLATE PYTHON GLOBAL: About to call asyncio.run(custom_site())")
+    asyncio.run(custom_site())
+    platform.window.console.log("TEMPLATE PYTHON GLOBAL: asyncio.run(custom_site()) completed.")
+except Exception as e_global:
+    # Use platform.window.console.log if available, otherwise fallback or just know it might not print
+    try:
+        platform.window.console.log(f"TEMPLATE PYTHON GLOBAL ERROR: {e_global}")
+    except:
+        # Fallback if platform.window.console.log itself fails here
+        # This error might only appear in the server console if standard print is active
+        print(f"TEMPLATE PYTHON GLOBAL FALLBACK ERROR: {e_global}")
+
+
+# --></script><head><!--
+// ... (rest of your HTML template)
